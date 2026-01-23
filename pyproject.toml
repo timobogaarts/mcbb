@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling >= 1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = 'mcbb'
+version= '0.0.1'
+description = "Python package utilities for Monte Carlo Breeding Blanket Simulations"
+readme= "README.md"
+authors = [{name = "Timo Bogaarts", email = "t.j.bogaarts@tue.nl"}]
+dependencies = [
+          "numpy",          
+          "h5py",          
+          "scipy",
+          "openmc_data_downloader"
+        ]
+requires-python = ">3.7"
