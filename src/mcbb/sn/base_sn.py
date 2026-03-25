@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 from ..blanket_base import Blanket, OpenMCBlanketSimulation
 from typing import Dict, Tuple 
-
+import lineax as lx
 
 def setup_linear_symm_mgop(blanket : Blanket, data_dictionary : Dict[str, Tuple[jnp.ndarray, jnp.ndarray]], 
                n_elem_per_region : Tuple[int],
@@ -49,7 +49,51 @@ def setup_linear_symm_mgop(blanket : Blanket, data_dictionary : Dict[str, Tuple[
 
     
     
+def create_weight_windows_for_blanket(blanket : Blanket, data_dictionary : Dict[str, Tuple[jnp.ndarray, jnp.ndarray]], 
+               n_elem_per_region : Tuple[int],
+               degree : int,
+               tn_order : int,               
+               n_weight_windows_in_blanket : int ,
+               solver : lx.AbstractLinearSolver = lx.BiCGStab(1e-10, 1e-10, max_steps = 200),               
+               **kwargs):
+    import jax_sn
+    '''
+    Automated 1D weight window generation using a 1D linear symmetric domain.
 
+    Parameters:
+    ------------
+    blanket : Blanket
+        The blanket for which to generate weight windows.
+    data_dictionary : Dict[str, Tuple[jnp.ndarray, jnp.ndarray]]
+        A dictionary mapping layer names to their cross-section data. Each entry should be a tuple of (total_cross_section, scattering_cross_section), where total_cross section is of shape [n_groups] and scattering_cross_section is of shape [l_order, n_groups, n_groups].
+    n_elem_per_region : Tuple[int]
+        A tuple specifying the number of finite elements to use in each region of the blanket. The length of this tuple should match the number of layers in the blanket.
+    degree : int
+        The degree of the finite element basis functions to use.
+    tn_order : int
+        The order of the Tn quadrature set to use for angular discretization.
+    n_weight_windows_in_blanket : int,
+        Number of weight window sampling nodes in the blanket
+    solver : lx.AbstractLinearSolver, optional
+        The linear solver to use for solving the forward-weighted CADIS equations. Default is BiCGStab with a tolerance of 1e-10 and a maximum of 200 steps.
+    '''
+    
+    mgop, source_basis = setup_linear_symm_mgop(blanket, data_dictionary, n_elem_per_region, degree, tn_order, **kwargs)
+    
+    element = jax_sn.solution_domain.BasixLagrangianSimplex(degree, 1)
+    solution_domain = jax_sn.solution_domain.SolutionDomain.from_element_and_domain(element, mgop.domain)
+    rhs = jax_sn.operators.multi_group_operator.right_hand_side.IsotropicSourceSingleGroup.from_operator(mgop, source_basis)
+
+    importance_map_solution = jax_sn.variance_reduction.fw_cadis_scalar_flux(mgop, rhs, solver)
+
+    blanket_start = sum([layer.thickness for layer in blanket.layers])
+    blanket_end = sum([layer.thickness for layer in blanket.layers[1:]])+ blanket_start
+    
+    d_interp = jnp.linspace(blanket_start, blanket_end, n_weight_windows_in_blanket)
+    interpolated_importance_map = solution_domain.interpolate(d_interp[:, None], importance_map_solution[:, 0 , ...])    
+    
+    return d_interp - blanket_start,  interpolated_importance_map
+    
     
     
 

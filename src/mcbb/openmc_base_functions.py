@@ -1,6 +1,8 @@
 import openmc 
 import numpy as np
 from typing import List, Iterable
+import jax.numpy as jnp
+
 def create_openmc_settings(batches : int, samples : int, source : openmc.SourceBase, verbosity : int = 1, seed : int = None):
     '''
     Function to create OpenMC settings for a fixed source simulation
@@ -160,4 +162,22 @@ def mgxs_lib_to_data_dicts(mgxs_lib : openmc.mgxs.Library, conversion_factor = 1
 
     return total_scat_data, aux_data_dict
     
+
+
+def _importance_map_to_weight_windows(importance_map : jnp.ndarray, ww_lower_upper_ratio : int = 3):
+    '''
+    Maps a importance map to weight windows.
+
+    Importance maps with zero in them can be clipped to some maximum value
+    '''
+
+    ww_lower = jnp.zeros_like(importance_map)
+
+    importance_map_safe = jnp.where(importance_map > 0, importance_map, 1e-10)
+
+    ww_lower     = jnp.where(importance_map > 0, 1/ ((ww_lower_upper_ratio + 1) / 2 * importance_map_safe) , 0)
+    max_ww_value = jnp.max(ww_lower)
+
+    ww_lower_norm  = ww_lower / (max_ww_value * (1.0 + ww_lower_upper_ratio ) /2.0 ) # normalise so avg is 1
     
+    return ww_lower_norm, ww_lower_norm * ww_lower_upper_ratio
