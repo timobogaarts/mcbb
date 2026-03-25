@@ -12,35 +12,21 @@ def create_openmc_ce_materials(blanket : Blanket, download=False, download_locat
 
     Parameters
     ----------
-    material_dictionary : dict
-        The material dictionary
-    download : bool
-        If True, download the cross-section data for the materials
-        If False, use the cross-section data already downloaded but still set the OPENMC_CROSS_SECTIONS environment variable
-    download_location : str
-        The location where the cross-section data should be downloaded to
-    libraries : List[str]
-        A list of libraries to download the cross-section data from. Default is ["FENDL-3.1d"]
+    blanket : Blanket
+        A Blanket object containing the materials of the blanket. Density assumed in m3
+    download : bool, optional
+        Whether to download the cross section data, by default False
+    download_location : str, optional
+        The location to download the cross section data to, by default ""
+    libraries : List[str], optional
+        The libraries to download, by default ["FENDL-3.1d"]
+    print_output : bool, optional
+        Whether to print the output of the download, by default False
     
     Returns
     -------    
-    total_material_dict : dict
-        A dictionary containing the OpenMC materials    
-    -------
-    
-    The material dictionary should be in the following format:    
-    {
-        "Material_name": {
-            "Elements": {
-                "Element_name": atom_number,
-                ...
-            }
-        },
-        ...
-    }
-
-    The atom_number is the number of atoms per m^3
-    It can also contain other fields used for the specific benchmark (e.g. a thickness of the material in a slab geometry), but this will be ignored here
+    total_material_list : List
+        A list containing the OpenMC materials    
 
     '''
 

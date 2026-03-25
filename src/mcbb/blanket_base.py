@@ -40,7 +40,7 @@ class OpenMCBlanketSimulation(ABC):
     @cached_property
     def materials(self):
         from .materials import create_openmc_ce_materials
-        return create_openmc_ce_materials(self.blanket, self.settings_blanket.download, self.settings_blanket.download_location)        
+        return openmc.Materials(create_openmc_ce_materials(self.blanket, self.settings_blanket.download, self.settings_blanket.download_location))        
     
     @cached_property
     @abstractmethod
@@ -78,6 +78,12 @@ class OpenMCBlanketSimulation(ABC):
             The path to the OpenMC statepoint file
         -------
         '''
+        import os 
+
+        if (statepoint_file != None) and (os.path.exists(statepoint_file)):
+            print("Cached at statepoint file: " + statepoint_file)
+            self.sp_file = statepoint_file
+            return statepoint_file
         model = openmc.Model(self.geometry, self.materials, self.settings, self.tallies)
         sp_file = model.run(threads=12)
         
@@ -127,7 +133,7 @@ class OpenMCBlanketSimulation(ABC):
 
         tallies_copy = self.tallies[:]
         tallies_omc = openmc.Tallies(tallies_copy)
-        mgxs_lib.add_to_tallies_file(tallies_omc, merge=True)
+        mgxs_lib.add_to_tallies(tallies_omc, merge=True)                
         model = openmc.Model(self.geometry, self.materials, self.settings, tallies_omc)
         
         sp_file = model.run(threads=12)
@@ -136,7 +142,13 @@ class OpenMCBlanketSimulation(ABC):
             mgxs_lib.load_from_statepoint(sp)
         
         return mgxs_lib, self.get_tally_results(sp_file, quantities=["mean", "std_dev"])
- 
-    
+      
+    def plot_geometry(self,  basis, slice_coord):
+        plots = openmc.Plot.from_geometry(self.geometry, basis = basis, slice_coord=slice_coord)
+        plots.color_by = 'material'
+        openmc.plot_inline(plots)
+        
+
+
     
     

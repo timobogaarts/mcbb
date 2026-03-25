@@ -121,3 +121,43 @@ def mgxs_lib_to_standard_formatting(mgxs_lib : openmc.mgxs.Library, conversion_f
 
         mgxs_dict[mat.name] = mat_dict
     return mgxs_dict
+
+
+def mgxs_lib_to_data_dicts(mgxs_lib : openmc.mgxs.Library, conversion_factor = 100.0):
+    '''
+    Function to convert an OpenMC mgxs.Library to a dictionary of multi-group cross-section data for easier use
+    
+    This converts it to the following format:
+
+    sigma_l_gout_gin = [l, g_out, g_in] 
+
+    instead of the normal OpenMC format of
+
+    [g_in, g_out, l]
+
+    also applies a conversion factor
+
+
+    Parameters
+    ----------
+    mgxs_lib : openmc.mgxs.Library
+        The OpenMC multi-group cross-section library object for the breeding blanket
+    conversion_factor : float
+        A conversion factor to apply to the cross-section data (default is 100.0 to convert from cm^-1 to m^-1)
+
+    Returns
+    -------
+    mgxs_dict : dict
+        A dictionary containing the multi-group cross-section data in a standard format
+    -------
+
+    '''
+    mgxs_dict = mgxs_lib_to_standard_formatting(mgxs_lib, conversion_factor)
+
+    total_scat_data = {key : (mgxs_dict[key]['total'], mgxs_dict[key]['nu-scatter matrix']) for key in mgxs_dict.keys()}
+
+    aux_data_dict = {key : {k : mgxs_dict[key][k] for k in mgxs_dict[key].keys() if k not in ['total', 'nu-scatter matrix']} for key in mgxs_dict.keys()}
+
+    return total_scat_data, aux_data_dict
+    
+    
