@@ -1,10 +1,21 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Dict, List
 from abc import ABC, abstractmethod
 import openmc
 from functools import cached_property
 from typing import Union, Literal, Iterable
 import numpy as np
+import copy
+
+
+def _core_dict(self):
+    '''
+    Helper for a deepcopy without any cached properties: just returns the fields.
+    '''
+    return {
+        f.name: getattr(self, f.name)
+        for f in fields(self)
+    }
 
 @dataclass
 class BlanketLayer:
@@ -31,6 +42,7 @@ class OpenMCSettingsBlanket:
     samples : int 
     verbosity : int = 1
     seed     : int = None
+    weight_windows : openmc.WeightWindows  = None
 
 @dataclass
 class OpenMCBlanketSimulation(ABC):
@@ -57,16 +69,43 @@ class OpenMCBlanketSimulation(ABC):
     def source(self):
         ...
 
+    @abstractmethod
+    def get_tally_results(self, sp_file : Union[str, None] = None, quantities : List[Literal["mean", "std_dev", "rel_err"]] = ["mean"]):
+        ...
+
     @cached_property
     def settings(self):
         from .openmc_base_functions import create_openmc_settings
+        
         return create_openmc_settings(
-            batches   = self.settings_blanket.batches,
-            samples   = self.settings_blanket.samples,
-            source    = self.source,
-            verbosity = self.settings_blanket.verbosity,
-            seed      = self.settings_blanket.seed
+            batches        = self.settings_blanket.batches,
+            samples        = self.settings_blanket.samples,
+            source         = self.source,
+            verbosity      = self.settings_blanket.verbosity,
+            seed           = self.settings_blanket.seed,
+            weight_windows = self.settings_blanket.weight_windows
         )
+    
+    def with_weight_windows(self, weight_windows : openmc.WeightWindows):
+        '''
+        Create a new object that has weight windows in the settings.
+        The rest of the geometry, materials, and tallies are unchanged.
+
+        Parameters
+        ----------
+        weight_windows : openmc.WeightWindows
+            The weight windows to use in the new simulation object
+        Returns
+        -------
+        new_simulation : OpenMCBlanketSimulation
+            A new OpenMCBlanketSimulation object with the same geometry, materials, and tallies as the original, but with the specified weight windows in the settings
+        -------
+        
+        '''
+        new = type(self)(**_core_dict(self))
+        new.settings_blanket.weight_windows = weight_windows
+        
+        return new
     
     def run(self, statepoint_file : str = None):
         import shutil
@@ -93,11 +132,6 @@ class OpenMCBlanketSimulation(ABC):
         
         self.sp_file = sp_file
         return sp_file
-    
-    @abstractmethod
-    def get_tally_results(self, sp_file : Union[str, None] = None, quantities : List[Literal["mean", "std_dev", "rel_err"]] = ["mean"]):
-        ...
-
 
     def _setup_mgxs_lib(self, egroups : Iterable[float], legendre_order : int, extra_types  : List[str] = ['(n,Xt)', 'heating']):
         from .openmc_base_functions import create_mgxs_lib
@@ -141,7 +175,9 @@ class OpenMCBlanketSimulation(ABC):
         with openmc.StatePoint(sp_file) as sp:
             mgxs_lib.load_from_statepoint(sp)
         
-        return mgxs_lib, self.get_tally_results(sp_file, quantities=["mean", "std_dev"])
+        self.sp_file = sp_file
+
+        return mgxs_lib
       
     def plot_geometry(self,  basis, slice_coord):
         plots = openmc.Plot.from_geometry(self.geometry, basis = basis, slice_coord=slice_coord)

@@ -3,7 +3,7 @@ import numpy as np
 from typing import List, Iterable
 import jax.numpy as jnp
 
-def create_openmc_settings(batches : int, samples : int, source : openmc.SourceBase, verbosity : int = 1, seed : int = None):
+def create_openmc_settings(batches : int, samples : int, source : openmc.SourceBase, verbosity : int = 1, seed : int = None, weight_windows : openmc.WeightWindows = None):
     '''
     Function to create OpenMC settings for a fixed source simulation
     Parameters
@@ -26,10 +26,10 @@ def create_openmc_settings(batches : int, samples : int, source : openmc.SourceB
         The OpenMC Settings object for the simulation
     -------
     '''
-    settings = openmc.Settings()
+    settings               =  openmc.Settings()
     settings.batches       = batches
     settings.particles     = int(samples)
-    settings.inactive      = 0
+    settings.inactive      = 0  #fixed source, so set 0 
     settings.verbosity     = verbosity
 
     if seed is not None:
@@ -41,6 +41,10 @@ def create_openmc_settings(batches : int, samples : int, source : openmc.SourceB
     settings.source           = source
     settings.survival_biasing = False
     settings.output           = {'tallies' : False}    
+    
+    if weight_windows is not None:
+        settings.weight_windows    = weight_windows
+        settings.weight_windows_on =  True
     
     return settings
 
@@ -168,7 +172,20 @@ def _importance_map_to_weight_windows(importance_map : jnp.ndarray, ww_lower_upp
     '''
     Maps a importance map to weight windows.
 
-    Importance maps with zero in them can be clipped to some maximum value
+    Parameters
+    ----------
+    importance_map : jnp.ndarray
+        An importance map. Arbitrarily shaped (computation don't depend on specific shape)
+
+    ww_lower_upper_ratio : int
+        The ratio of the upper weight window to the lower weight window (default is 3)
+
+    Returns
+    -------
+    ww_lower_norm : jnp.ndarray
+        The normalised lower weight window values corresponding to the importance map
+    ww_upper_norm : jnp.ndarray
+        The normalised upper weight window values corresponding to the importance map
     '''
 
     ww_lower = jnp.zeros_like(importance_map)
@@ -181,3 +198,78 @@ def _importance_map_to_weight_windows(importance_map : jnp.ndarray, ww_lower_upp
     ww_lower_norm  = ww_lower / (max_ww_value * (1.0 + ww_lower_upper_ratio ) /2.0 ) # normalise so avg is 1
     
     return ww_lower_norm, ww_lower_norm * ww_lower_upper_ratio
+
+def _convert_to_openmc_format(importance_map : jnp.ndarray, group_boundaries : jnp.ndarray):
+    '''
+    Flips the group boundaries to be in ascending order. Also puts the weight windows in the format expected by OpenMC ([..., n_groups]) instead of the format we use for computation ([n_groups, ...])
+
+    Parameters
+    ----------
+    importance_map : jnp.ndarray
+        Importance map. Assumed first axis is energy.
+    group_boundaries : jnp.ndarray
+        The energy group boundaries for the multi-group cross-section library, ordered from low to high
+
+    Returns
+    -------
+    ww_lower_openmc : jnp.ndarray
+        The lower weight window values corresponding to the importance map, in the format expected by OpenMC (group boundaries in descending order)
+    
+    ww_upper_openmc : jnp.ndarray
+        The upper weight window values corresponding to the importance map, in the format expected by OpenMC (group boundaries in descending order)
+
+    flipped_group_boundaries : jnp.ndarray
+        The energy group boundaries in ascending order
+    '''
+    if np.all(np.sort(group_boundaries) == group_boundaries):
+        ascending_group_boundaries = group_boundaries
+        ascending_importance_map = importance_map
+    else:
+        ascending_group_boundaries = np.flip(group_boundaries, axis=0)
+        ascending_importance_map = np.flip(importance_map, axis=0)
+
+    flipped_transposed_importance_map = np.moveaxis(ascending_importance_map, 0, -1)
+
+    return flipped_transposed_importance_map, ascending_group_boundaries
+
+
+def importance_map_to_weight_window(importance_map : jnp.ndarray, group_boundaries : jnp.ndarray, mesh : openmc.MeshBase, ww_lower_upper_ratio : int = 3, **kwargs):
+    '''
+    Maps a importance map to weight windows for use in OpenMC.
+
+    The importance map is transposed (energy groups last), and the group boundaries and the importance map are 
+
+    Parameters
+    ----------
+    importance_map : jnp.ndarray
+        An importance map. Should have the same shape as the mesh dimensions. [n_groups, mesh.shape]. Cannot be checked: openmc.MeshBase cannot a priori load a MOAB mesh, so 
+        it doesn't know the mesh shape.
+
+    group_boundaries : jnp.ndarray
+        Energy groups used for the computation of the importance map
+
+    mesh : openmc.MeshBase
+        The OpenMC mesh object corresponding to the importance map.
+
+    ww_lower_upper_ratio : int
+        The ratio of the upper weight window to the lower weight window (default is 3)
+
+    **kwargs: dict
+
+        Directly passed to openmc.WeightWindows.
+
+    Returns
+    -------
+    weight_windows : openmc.WeightWindows
+        An OpenMC WeightWindows object containing the lower and upper weight windows corresponding to the importance map.
+    '''
+    assert importance_map.shape[0] == np.array(group_boundaries).shape[0] - 1, "The first dimension of the importance map should match the number of energy groups (group boundaries - 1)"
+
+    openmc_importance_map, group_boundaries_openmc = _convert_to_openmc_format(importance_map, group_boundaries)
+    ww_lower_norm, ww_upper_norm                   = _importance_map_to_weight_windows(openmc_importance_map, ww_lower_upper_ratio)    #[mesh.shape, n_groups]        
+
+    weight_windows = openmc.WeightWindows(mesh, lower_ww_bounds = np.array(ww_lower_norm), upper_ww_bounds = np.array(ww_upper_norm), energy_bounds = np.array(group_boundaries_openmc), particle_type = "neutron", **kwargs)
+
+    return weight_windows
+
+

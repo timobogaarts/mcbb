@@ -82,8 +82,9 @@ class OpenMCLinearBlanketSimulation(OpenMCBlanketSimulation):
             raise ValueError("No statepoint file provided and simulation has not been run yet. Please run the simulation first or provide a specific statepoint file.")
         result = {}
         with openmc.StatePoint(sp_file) as sp:            
-            for tally in self.tallies:                
-                sp_tally     = sp.tallies[tally.id]
+            for tally in self.tallies:   
+                sp_tally     = sp.get_tally(name = tally.name) 
+                #sp_tally     = sp.tallies[tally.id]
                 mesh_data    = sp_tally.find_filter(openmc.MeshFilter).mesh
                 # here only x-dependent data is extracted, consistent with a 1D simulation...
                 result[sp_tally.name] = {}
@@ -103,11 +104,7 @@ class OpenMCLinearBlanketSimulation(OpenMCBlanketSimulation):
 
     
 @dataclass
-class OpenMCSymmetricLinearBlanketSimulation(OpenMCLinearBlanketSimulation):
-    n_x_spacing_tally : int 
-    energy_bins     : Iterable[float]
-    source_strength : float = 1.0
-    tally_types     : Tuple[Literal["flux", "heating", "tritium"]] = ("flux", "heating", "tritium")
+class OpenMCSymmetricLinearBlanketSimulation(OpenMCLinearBlanketSimulation):    
             
     @cached_property    
     def geometry(self):
