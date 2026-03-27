@@ -27,11 +27,16 @@ class BlanketLayer:
 class Blanket(ABC):
     layers : List[BlanketLayer]
 
+
     
     @property 
     @abstractmethod
     def average_thickness(self):
         ...
+
+    @property
+    def n_layers(self):
+        return len(self.layers)
 
 
 @dataclass
@@ -146,6 +151,9 @@ class OpenMCBlanketSimulation(ABC):
     def create_mgxs_library(self,  energy_groups : Iterable[float], legendre_order : int, extra_types : List[str] = ['(n,Xt)', 'heating']):
         '''
         Function to create a multi-group cross-section library for the OpenMC simulation
+
+        Runs the simulation using the specified settings as well; 
+        results are available in the same way using get_tally_results.
 
         Parameters
         ----------

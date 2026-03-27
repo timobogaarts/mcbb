@@ -19,6 +19,9 @@ class Blanket1D(Blanket):
     def average_thickness(self):
         return sum([layer.thickness for layer in self.layers[1:]])
 
+    @property
+    def thicknesses(self):
+        return [layer.thickness for layer in self.layers]
     
 @dataclass
 class OpenMCLinearBlanketSimulation(OpenMCBlanketSimulation):

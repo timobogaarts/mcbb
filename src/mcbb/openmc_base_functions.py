@@ -1,6 +1,6 @@
 import openmc 
 import numpy as np
-from typing import List, Iterable
+from typing import List, Iterable, Tuple
 import jax.numpy as jnp
 
 def create_openmc_settings(batches : int, samples : int, source : openmc.SourceBase, verbosity : int = 1, seed : int = None, weight_windows : openmc.WeightWindows = None):
@@ -273,3 +273,60 @@ def importance_map_to_weight_window(importance_map : jnp.ndarray, group_boundari
     return weight_windows
 
 
+def tetrahedral_mesh_to_dagmc_file(mesh : Tuple[jnp.ndarray, jnp.ndarray], filename : str, conversion_factor : float = 100.0):
+    '''
+    Function to convert a tetrahedral mesh (given by vertices and connectivity) to a DAGMC .h5m file for use in OpenMC.
+
+    Parameters
+    ----------
+    mesh : Tuple[jnp.ndarray, jnp.ndarray]
+        A tuple containing the vertices and connectivity of the tetrahedral mesh. The vertices should be of shape [n_vertices, 3] and the connectivity should be of shape [n_elements, 4] (assuming tetrahedral elements).
+    filename : str
+        The name of the output .h5m file to create
+
+    Returns
+    -------
+    filename
+        This function creates a .h5m file type at the specified filename location and returns the filename
+    '''
+    import h5py
+    assert len(mesh) == 2, "Mesh should be a tuple of (vertices, connectivity)"
+    assert mesh[0].shape[1] == 3, "Vertices should be of shape [n_vertices, 3]"
+    assert mesh[1].shape[1] == 4, "Connectivity should be of shape [n_elements, 4] for tetrahedral elements"
+    from jax_sbgeom.interfaces.dagmc_interface import tetrahedral_mesh_to_moab_mesh
+
+    tetrahedral_mesh_to_moab_mesh(*mesh, conversion_factor).write_file(filename)
+    return filename
+
+
+def tetrahedral_mesh_to_openmc_mesh(mesh : Tuple[jnp.ndarray, jnp.ndarray], filename : str, name : str, conversion_factor : float = 100.0):
+    '''
+    Function to convert a tetrahedral mesh (given by vertices and connectivity) to an OpenMC UnstructuredMesh object, using a DAGMC .h5m file.
+    
+    Also applies a conversion factor to the vertex coordinates (default is 100.0 to convert from m to cm, which is the unit expected by OpenMC)
+
+    Parameters
+    ----------
+    mesh : Tuple[jnp.ndarray, jnp.ndarray]
+        A tuple containing the vertices and connectivity of the tetrahedral mesh. The vertices should be of shape [n_vertices, 3] and the connectivity should be of shape [n_elements, 4] (assuming tetrahedral elements).
+    filename : str  
+        The name of the output .h5m file to create for the DAGMC mesh
+    name : str
+        The name to give to the OpenMC UnstructuredMesh object
+    conversion_factor : float
+        A conversion factor to apply to the vertex coordinates (default is 100.0 to convert from m to cm, which is the unit expected by OpenMC)
+    
+    Returns
+    -------
+    openmc.UnstructuredMesh
+        An OpenMC UnstructuredMesh object created from the tetrahedral mesh, with the specified name and vertex coordinates converted using the conversion factor.
+    '''    
+    tetrahedral_mesh_to_dagmc_file(mesh, filename, conversion_factor)
+    return openmc.UnstructuredMesh( filename = filename, library = 'moab', name = name)
+
+def tetrahedral_mesh_importance_to_openmc_weight_window(mesh : Tuple[jnp.ndarray, jnp.ndarray], importance_map : jnp.ndarray, group_boundaries : jnp.ndarray, filename : str, name : str, conversion_factor : float =100.0, ww_lower_upper_ratio : int = 3, **kwargs):
+    assert importance_map.shape[-1] == mesh[1].shape[0], f"The last dimension of the importance map: {importance_map.shape[-1]} should match the number of elements in the mesh {mesh[1].shape[0]}"
+
+    openmc_mesh = tetrahedral_mesh_to_openmc_mesh(mesh, filename, name, conversion_factor)
+    weight_windows = importance_map_to_weight_window(importance_map, group_boundaries = group_boundaries, mesh = openmc_mesh, ww_lower_upper_ratio = ww_lower_upper_ratio, **kwargs)
+    return weight_windows

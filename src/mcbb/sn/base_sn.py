@@ -49,7 +49,7 @@ def setup_linear_symm_mgop(blanket : Blanket, data_dictionary : Dict[str, Tuple[
 
     
     
-def create_weight_windows_for_blanket(blanket : Blanket, data_dictionary : Dict[str, Tuple[jnp.ndarray, jnp.ndarray]], 
+def create_importance_map_for_blanket(blanket : Blanket, data_dictionary : Dict[str, Tuple[jnp.ndarray, jnp.ndarray]], 
                n_elem_per_region : Tuple[int],
                degree : int,
                tn_order : int,               
@@ -76,6 +76,15 @@ def create_weight_windows_for_blanket(blanket : Blanket, data_dictionary : Dict[
         Number of weight window sampling nodes in the blanket
     solver : lx.AbstractLinearSolver, optional
         The linear solver to use for solving the forward-weighted CADIS equations. Default is BiCGStab with a tolerance of 1e-10 and a maximum of 200 steps.
+    **kwargs
+        Additional keyword arguments to pass to the multi-group operator setup function.(setup_linear_symm_mgop)
+
+    Returns
+    -------
+    d_interp : jnp.ndarray
+        The spatial locations of the weight windows within the blanket, relative to the start of the blanket (shape [n_weight_windows_in_blanket])
+    interpolated_importance_map : jnp.ndarray
+        The interpolated importance map values at the weight window locations (shape [n_groups, n_weight_windows_in_blanket])
     '''
     
     mgop, source_basis = setup_linear_symm_mgop(blanket, data_dictionary, n_elem_per_region, degree, tn_order, **kwargs)
@@ -95,6 +104,36 @@ def create_weight_windows_for_blanket(blanket : Blanket, data_dictionary : Dict[
     return d_interp - blanket_start,  interpolated_importance_map
     
     
-    
 
+
+def create_3D_importance_map_of_blanket(
+                               blanket_base : Blanket,
+                               data_dict : dict,                        
+                               fw_distance : float,
+                               n_s : int, n_theta : int, n_phi : int, toroidal_extent , parametrised_surface ,                                      
+                               degree : int = 3,
+                               tn_order : int = 3,                               
+                               disc_per_region : int = 5,                               
+                               ):
+    from jax_sbgeom.flux_surfaces import ParametrisedSurface, ToroidalExtent, mesh_tetrahedra
+
+    assert isinstance(blanket_base, Blanket), "blanket_base must be an instance of Blanket"
+    assert isinstance(parametrised_surface, ParametrisedSurface), "parametrised_surface must be an instance of jax_sbgeom.ParametrisedSurface"
+    assert isinstance(toroidal_extent, ToroidalExtent), "toroidal_extent must be an instance of jax_sbgeom.ToroidalExtent"
+
+    d, importance_map = create_importance_map_for_blanket(blanket_base, data_dict, [disc_per_region for i in range(len(blanket_base.layers))], degree, tn_order, n_weight_windows_in_blanket= n_s) #[n_s], [n_energy_groups]
+    tet_mesh    = mesh_tetrahedra(parametrised_surface, 1.0 + fw_distance + d, toroidal_extent, n_theta, n_phi)    
+
+    importance_map_layer = 0.5 *(importance_map[..., :-1] + importance_map[..., 1:]) # [n_layer_blocks]
+
+    if toroidal_extent.full_angle():
+        element_shape = (n_s -1, n_theta, n_phi, 6)
+    else:
+        element_shape = (n_s -1, n_theta, n_phi - 1, 6)
+
+    assert jnp.prod(jnp.array(element_shape)) == tet_mesh[1].shape[0], f"Element shape {element_shape} does not match the number of elements in the mesh {tet_mesh[1].shape[0]}"
     
+    importance_map_3d = jnp.broadcast_to(importance_map_layer[:,:, None, None, None], (importance_map.shape[0],)+element_shape)
+    
+    return tet_mesh, importance_map_3d.reshape(importance_map.shape[0], -1)
+
