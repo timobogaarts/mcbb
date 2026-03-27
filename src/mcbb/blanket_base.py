@@ -79,6 +79,10 @@ class OpenMCBlanketSimulation(ABC):
         ...
 
     @cached_property
+    def model(self):
+        return openmc.Model(self.geometry, self.materials, self.settings, self.tallies)
+
+    @cached_property
     def settings(self):
         from .openmc_base_functions import create_openmc_settings
         
