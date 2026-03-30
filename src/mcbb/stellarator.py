@@ -2,7 +2,7 @@ from mcbb.linear_blanket import Blanket1D
 
 from .blanket_base import OpenMCBlanketSimulation, Blanket, OpenMCSettingsBlanket
 from .openmc_base_functions import _get_tally_results_divisor
-from jax_sbgeom.flux_surfaces import ParametrisedSurface, ToroidalExtent
+from jax_sbgeom.flux_surfaces import ParametrisedSurface, ToroidalExtent, FluxSurface, FluxSurfaceExtendedDistanceMatrix, FluxSurfaceNormalExtendedNoPhi
 from jax_sbgeom.interfaces.blanket_creation import LayeredDiscreteBlanket
 from dataclasses import dataclass
 import copy
@@ -51,7 +51,7 @@ class StellaratorBlanket(Blanket):
             layers.append(StellaratorBlanketLayer(name = layer_1D.name, elements = layer_1D.elements, physical_thickness_matrix = jnp.atleast_2d(thickness_matrix)))
         return cls(layers)
 
-    @property     
+    @cached_property     
     def average_thicknesses(self):
         return jnp.array([jnp.mean(layer.physical_thickness_matrix) for layer in self.layers[:]])
 
@@ -59,7 +59,6 @@ class StellaratorBlanket(Blanket):
     def thicknesses(self):
         return [layer.physical_thickness_matrix for layer in self.layers]
     
-
 
 @dataclass
 class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
@@ -70,7 +69,7 @@ class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
     source_callable      : Callable[[jnp.ndarray], jnp.ndarray]  # A callable that takes in a radial coordinate spacing and returns a radial source distribution
 
     filename_start       : str
-    boundary_type        : Literal['reflective', 'vacuum']     
+    boundary_type        : Literal['reflective', 'vacuum']
 
     @classmethod
     def from_blanket(cls, blanket : Blanket, discrete_blanket : LayeredDiscreteBlanket, parametrised_surface : ParametrisedSurface, energy_bins : Iterable[float], 
@@ -162,16 +161,25 @@ class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
 
         return _get_tally_results_divisor(sp_file, tuple(tally.name for tally in self.tallies), tuple(quantities))
     
+    def _create_1d_importance_map(self, data_dict : Dict, distance_samples : jnp.ndarray, degree = 3, tn_order = 3, n_elem_per_region = 5):
+        from .sn.base_sn import create_importance_map_for_blanket            
+        return create_importance_map_for_blanket(self.blanket, data_dict, [n_elem_per_region for i in range(len(self.blanket.layers))], degree = degree, tn_order = tn_order,s_values_blanket = distance_samples)
 
-    def _create_3d_importance_map(self, data_dict : Dict, n_samples : int):
-        from .sn.base_sn import create_3D_importance_map_of_blanket
-        
-        create_3D_importance_map_of_blanket(self.blanket, data_dict, )
+    def _create_1d_importance_map_radial(self, data_dictionary : Dict, degree = 3, tn_order = 3, n_elem_per_region = 5):
+
+        d_physical = self.discrete_blanket.map_to_physical_spacing(jnp.cumsum(jnp.array(self.blanket.thicknesses)))
+
+        return d_physical, self._create_1d_importance_map(data_dictionary, d_physical, degree, tn_order, n_elem_per_region)
     
+    def create_weight_windows(self, data_dictionary : Dict, degree  : int = 3, tn_order : int = 3, n_elem_per_region : int = 5, ww_lower_upper_ratio : int = 3):
+        from .openmc_base_functions import _importance_map_to_weight_windows
+        d_physical, importance_map = self._create_1d_importance_map_radial(data_dictionary, degree, tn_order, n_elem_per_region)
 
-    def create_fw_cadis_weight_window(self):
-        pass
+        ww_lower_norm, ww_upper_norm  = _importance_map_to_weight_windows(importance_map, ww_lower_upper_ratio) #[n_energy_groups, n_spacing]
+        print(ww_lower_norm.shape)
         
+    
+            
 
     # @cached_property    
     # def fast_flux(self):
@@ -187,7 +195,7 @@ class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
 
 def generate_flux_surface_source(flux_surface : ParametrisedSurface, s_spacing : jnp.ndarray, source_callable : Callable[[jnp.ndarray], jnp.ndarray], n_theta : int, n_phi : int, toroidal_extent : ToroidalExtent, source_mesh_filename : str):
     '''
-    Generates a flux_surface_source from a given radial coordinate spacing. Uses the jax_sbgeom flux_surfacde_reaction_rates_simple underneath.
+    Generates a flux_surface_source from a given radial coordinate spacing.
 
     An example to generate the callable source is to use the jax_sbgeom function jax_sbgeom flux_surface_reaction_rates_simple function.
     
@@ -196,6 +204,8 @@ def generate_flux_surface_source(flux_surface : ParametrisedSurface, s_spacing :
     - "nalpha" : Density shaping parameter
     - "Ti0" : Central ion temperature
     - "Tialpha" : Ion temperature shaping parameter
+
+    Automatically applies a conversion factor of 100.0 to convert from meters to centimeters, as OpenMC and MOAB use centimeters as the default unit for geometry.
 
 
     Parameters

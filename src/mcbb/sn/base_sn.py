@@ -19,7 +19,7 @@ def setup_linear_symm_mgop(blanket : Blanket, data_dictionary : Dict[str, Tuple[
 
     names_blanket = [layer.name for layer in blanket.layers]
 
-    layer_sizes = [layer.thickness for layer in blanket.layers]
+    layer_sizes =  blanket.average_thicknesses
     
     assert set(names_blanket) == set(xs_data_dict.keys()), "The names of the layers in the blanket must match the names of the cross-section data. Names {} and data names {}".format(names_blanket, xs_data_dict.keys())
 
@@ -45,7 +45,9 @@ def setup_linear_symm_mgop(blanket : Blanket, data_dictionary : Dict[str, Tuple[
 
     source_basis = jnp.repeat(source, repeats = solution_domain.n_basis, axis = -1).reshape(-1, solution_domain.n_basis)
 
-    return jax_sn.operators.multi_group_operator.create_multi_group_operator(solution_domain, create_tn_quadrature_set(tn_order), **kwargs), source_basis
+    reduced_quadrature_set = jax_sn.quadrature_set.QuadratureSetReduced.from_quadrature_set(create_tn_quadrature_set(tn_order), solution_domain.dimension)
+    
+    return jax_sn.operators.multi_group_operator.create_multi_group_operator(solution_domain, reduced_quadrature_set, **kwargs), source_basis
 
     
     
@@ -53,7 +55,7 @@ def create_importance_map_for_blanket(blanket : Blanket, data_dictionary : Dict[
                n_elem_per_region : Tuple[int],
                degree : int,
                tn_order : int,               
-               n_weight_windows_in_blanket : int ,
+               s_values_blanket : jnp.ndarray,
                solver : lx.AbstractLinearSolver = lx.BiCGStab(1e-10, 1e-10, max_steps = 200),               
                **kwargs):
     import jax_sn
@@ -72,8 +74,11 @@ def create_importance_map_for_blanket(blanket : Blanket, data_dictionary : Dict[
         The degree of the finite element basis functions to use.
     tn_order : int
         The order of the Tn quadrature set to use for angular discretization.
-    n_weight_windows_in_blanket : int,
-        Number of weight window sampling nodes in the blanket
+    s_values_blanket : jnp.ndarray
+        The spatial locations within the blanket at which to evaluate the importance map, relative to the start of the blanket (shape [n_weight_windows_in_blanket])
+        Includes the plasma region: the blanket.average_thicknesses[0] determines the extent to which the plasma is taken. If the plasma is not desired,
+        one should set the first entry of s_values_blanket to be equal to blanket.average_thicknesses[0] and increase from there. 
+
     solver : lx.AbstractLinearSolver, optional
         The linear solver to use for solving the forward-weighted CADIS equations. Default is BiCGStab with a tolerance of 1e-10 and a maximum of 200 steps.
     **kwargs
@@ -95,21 +100,16 @@ def create_importance_map_for_blanket(blanket : Blanket, data_dictionary : Dict[
 
     importance_map_solution = jax_sn.variance_reduction.fw_cadis_scalar_flux(mgop, rhs, solver)
 
-    blanket_start = sum([layer.thickness for layer in blanket.layers])
-    blanket_end = sum([layer.thickness for layer in blanket.layers[1:]])+ blanket_start
+    blanket_start = sum(blanket.average_thicknesses[1:])   # compensate for symmetry!
     
-    d_interp = jnp.linspace(blanket_start, blanket_end, n_weight_windows_in_blanket)
-    interpolated_importance_map = solution_domain.interpolate(d_interp[:, None], importance_map_solution[:, 0 , ...])    
+    interpolated_importance_map = solution_domain.interpolate(blanket_start +s_values_blanket[:, None], importance_map_solution[:, 0 , ...])    
     
-    return d_interp - blanket_start,  interpolated_importance_map
-    
-
+    return interpolated_importance_map
 
 def create_3D_importance_map_of_blanket(
                                blanket_base : Blanket,
-                               data_dict : dict,                        
-                               fw_distance : float,
-                               n_s : int, n_theta : int, n_phi : int, toroidal_extent , parametrised_surface ,                                      
+                               data_dict : dict,                                                       
+                               n_s : int, n_theta : int, n_phi : int, toroidal_extent, parametrised_surface ,                                      
                                degree : int = 3,
                                tn_order : int = 3,                               
                                disc_per_region : int = 5,                               
@@ -120,8 +120,10 @@ def create_3D_importance_map_of_blanket(
     assert isinstance(parametrised_surface, ParametrisedSurface), "parametrised_surface must be an instance of jax_sbgeom.ParametrisedSurface"
     assert isinstance(toroidal_extent, ToroidalExtent), "toroidal_extent must be an instance of jax_sbgeom.ToroidalExtent"
 
-    d, importance_map = create_importance_map_for_blanket(blanket_base, data_dict, [disc_per_region for i in range(len(blanket_base.layers))], degree, tn_order, n_weight_windows_in_blanket= n_s) #[n_s], [n_energy_groups]
-    tet_mesh    = mesh_tetrahedra(parametrised_surface, 1.0 + fw_distance + d, toroidal_extent, n_theta, n_phi)    
+    s_values_blanket, importance_map = create_importance_map_for_blanket(blanket_base, data_dict, [disc_per_region for i in range(len(blanket_base.layers))], degree, tn_order, n_weight_windows_in_blanket= n_s) #[n_s], [n_energy_groups]
+    fw_distance = jnp.maximum(0.0, blanket_base.average_thicknesses[0] - 1.0) # fw distance is encoded as the distanc beyond 1 in a 
+
+    tet_mesh    = mesh_tetrahedra(parametrised_surface, 1.0 + fw_distance + s_values_blanket, toroidal_extent, n_theta, n_phi)    
 
     importance_map_layer = 0.5 *(importance_map[..., :-1] + importance_map[..., 1:]) # [n_layer_blocks]
 
