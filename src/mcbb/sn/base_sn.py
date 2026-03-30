@@ -103,7 +103,6 @@ def create_importance_map_for_blanket(blanket : Blanket, data_dictionary : Dict[
     
     return d_interp - blanket_start,  interpolated_importance_map
     
-    
 
 
 def create_3D_importance_map_of_blanket(
