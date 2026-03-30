@@ -16,8 +16,8 @@ class Blanket1D(Blanket):
     plasma_boundary_type : str = 'vacuum'
 
     @property     
-    def average_thickness(self):
-        return sum([layer.thickness for layer in self.layers[1:]])
+    def average_thicknesses(self):
+        return self.thicknesses
 
     @property
     def thicknesses(self):

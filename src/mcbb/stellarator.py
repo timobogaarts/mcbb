@@ -1,3 +1,5 @@
+from mcbb.linear_blanket import Blanket1D
+
 from .blanket_base import OpenMCBlanketSimulation, Blanket, OpenMCSettingsBlanket
 from .openmc_base_functions import _get_tally_results_divisor
 from jax_sbgeom.flux_surfaces import ParametrisedSurface, ToroidalExtent
@@ -8,9 +10,10 @@ import os
 from functools import cached_property
 import jax.numpy as jnp
 import numpy as onp
-from typing import Literal, Union, List, Iterable, Dict
+from typing import Literal, Union, List, Iterable, Dict, Callable
 import jax_sbgeom as jsb
 import openmc
+from .blanket_base import BlanketLayer, Blanket
 
 
 def create_openmc_sector_region_dagmc(filename, toroidal_extent : ToroidalExtent, boundary_type : Literal['reflective', 'vacuum']):
@@ -29,25 +32,55 @@ def create_openmc_sector_region_dagmc(filename, toroidal_extent : ToroidalExtent
     return openmc.Geometry(root = [openmc.Cell(cell_id = 9999, region = region, fill = dagmc_univ)])
 
 @dataclass
+class StellaratorBlanketLayer(BlanketLayer):
+    physical_thickness_matrix : jnp.ndarray
+    '''
+    The physical distance matrix of a stellarator blanket layer. [0,0] corresponds to theta, phi = 0,0, [-1,-1] corresponds to (2pi , 2pi / nfp)
+    '''
+
+@dataclass
+class StellaratorBlanket(Blanket):
+    
+    layers : List[StellaratorBlanketLayer]    
+    
+    @classmethod 
+    def from_1D_blanket(cls, blanket_1D : Blanket1D,  physical_d_matrices : List[jnp.ndarray]):
+        assert len(blanket_1D.layers) == len(physical_d_matrices), "Length of physical_d_matrices must match number of layers in blanket_1D"
+        layers = []
+        for layer_1D, thickness_matrix in zip(blanket_1D.layers, physical_d_matrices):
+            layers.append(StellaratorBlanketLayer(name = layer_1D.name, elements = layer_1D.elements, physical_thickness_matrix = jnp.atleast_2d(thickness_matrix)))
+        return cls(layers)
+
+    @property     
+    def average_thicknesses(self):
+        return jnp.array([jnp.mean(layer.physical_thickness_matrix) for layer in self.layers[:]])
+
+    @property
+    def thicknesses(self):
+        return [layer.physical_thickness_matrix for layer in self.layers]
+    
+
+
+@dataclass
 class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
+    blanket              : StellaratorBlanket
     parametrised_surface : ParametrisedSurface
     discrete_blanket     : LayeredDiscreteBlanket
     energy_bins          : Iterable[float]
-    source_kwargs        : dict
-
+    source_callable      : Callable[[jnp.ndarray], jnp.ndarray]  # A callable that takes in a radial coordinate spacing and returns a radial source distribution
 
     filename_start       : str
-    boundary_type        : Literal['reflective', 'vacuum'] 
+    boundary_type        : Literal['reflective', 'vacuum']     
 
     @classmethod
     def from_blanket(cls, blanket : Blanket, discrete_blanket : LayeredDiscreteBlanket, parametrised_surface : ParametrisedSurface, energy_bins : Iterable[float], 
-                     source_kwargs, 
+                     source_callable : Callable[[jnp.ndarray], jnp.ndarray],
                      batches : int, samples : int, download_location : os.PathLike, filename_start : str, boundary_type : Literal['reflective', 'vacuum'],
                      seed = None, verbosity = 7,
                      ):
         settings = OpenMCSettingsBlanket(download=True, download_location=download_location, seed = seed, batches = batches, samples = samples, verbosity = verbosity)        
         assert onp.allclose(onp.sort(energy_bins) , energy_bins), "Energy bins must be in ascending order"
-        return cls(blanket, settings, parametrised_surface, discrete_blanket, energy_bins, source_kwargs, filename_start, boundary_type)
+        return cls(blanket, settings, parametrised_surface, discrete_blanket, energy_bins, source_callable, filename_start, boundary_type)
 
     @cached_property
     def geometry(self):
@@ -93,7 +126,7 @@ class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
         Source generated is the same as the tally mesh.
 
         '''
-        radial_source = jnp.nan_to_num(jsb.interfaces.plasma.flux_surface_reaction_rates_simple(self.discrete_blanket.s_spacing, **self.source_kwargs))
+        radial_source = jnp.nan_to_num(self.source_callable(self.discrete_blanket.s_spacing))
 
         radial_source_midpoint = (radial_source[:-1] + radial_source[1:])/2
         source_on_mesh            = self.discrete_blanket.volume_mesh_structure.map_radial_array_to_layers(radial_source_midpoint)
@@ -131,10 +164,8 @@ class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
     
 
     def _create_3d_importance_map(self, data_dict : Dict, n_samples : int):
-
         from .sn.base_sn import create_3D_importance_map_of_blanket
-        self.blanket.thickn
-
+        
         create_3D_importance_map_of_blanket(self.blanket, data_dict, )
     
 
@@ -154,9 +185,18 @@ class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
     #     fast_flux = jnp.einsum("ij, kj -> ik", overlap_matrix, tally_results['FluxTally']['mean'] )[0]
     #     return fast_flux
 
-def generate_flux_surface_source(flux_surface : ParametrisedSurface, s_spacing : jnp.ndarray, source_kwargs : Dict, n_theta : int, n_phi : int, toroidal_extent : ToroidalExtent, source_mesh_filename : str):
+def generate_flux_surface_source(flux_surface : ParametrisedSurface, s_spacing : jnp.ndarray, source_callable : Callable[[jnp.ndarray], jnp.ndarray], n_theta : int, n_phi : int, toroidal_extent : ToroidalExtent, source_mesh_filename : str):
     '''
     Generates a flux_surface_source from a given radial coordinate spacing. Uses the jax_sbgeom flux_surfacde_reaction_rates_simple underneath.
+
+    An example to generate the callable source is to use the jax_sbgeom function jax_sbgeom flux_surface_reaction_rates_simple function.
+    
+    `source_callable = lambda s: jsb.flux_surfaces.flux_surface_reaction_rates_simple(s, n0 = 1e20, nalpha = 2.0, Ti0 = 10e3, Tialpha = 2.0)`
+    - "n0" : Central density
+    - "nalpha" : Density shaping parameter
+    - "Ti0" : Central ion temperature
+    - "Tialpha" : Ion temperature shaping parameter
+
 
     Parameters
     -----------
@@ -164,13 +204,9 @@ def generate_flux_surface_source(flux_surface : ParametrisedSurface, s_spacing :
         The flux surface to generate the source for. Used to generate the mesh and map the radial source onto the mesh.
     s_spacing : jnp.ndarray
         The radial coordinate spacing to generate the source for. Should be of shape (n_s,) where n_s is the number of radial points. The source will be generated at the midpoints of the radial spacing, so the first and last points will be ignored.
-    source_kwargs : Dict
-        The keyword arguments to pass to the jax_sbgeom flux_surface_reaction_rates_simple function. Should include at least the following keys:
-            - "n0" : Central density
-            - "nalpha" : Density shaping parameter
-            - "Ti0" : Central ion temperature
-            - "Tialpha" : Ion temperature shaping parameter
-
+    source_callable : Callable[[jnp.ndarray], jnp.ndarray]
+        A callable that takes in a radial coordinate spacing and returns a radial source distribution.
+     
     n_theta : int
         The number of poloidal points to use for the mesh.
     n_phi : int
@@ -188,7 +224,7 @@ def generate_flux_surface_source(flux_surface : ParametrisedSurface, s_spacing :
         
     '''
 
-    radial_source = jnp.nan_to_num(jsb.interfaces.plasma.flux_surface_reaction_rates_simple(s_spacing, **source_kwargs))
+    radial_source = jnp.nan_to_num(source_callable(s_spacing))
 
     radial_source_midpoint = (radial_source[:-1] + radial_source[1:])/2
 

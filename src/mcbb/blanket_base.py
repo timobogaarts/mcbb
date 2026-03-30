@@ -31,7 +31,11 @@ class Blanket(ABC):
     
     @property 
     @abstractmethod
-    def average_thickness(self):
+    def average_thicknesses(self):
+        '''
+        Average thicknesses of the layers in the blanket. 
+        Should be a list of the same length as the number of layers, where each entry is the average thickness of that layer in meters. 
+        The first layer is expected to be the plasma, and the rest are the blanket layers.'''
         ...
 
     @property
