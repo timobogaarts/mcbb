@@ -175,7 +175,7 @@ class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
         from .openmc_base_functions import _importance_map_to_weight_windows
         d_physical, importance_map = self._create_1d_importance_map_radial(data_dictionary, degree, tn_order, n_elem_per_region)
 
-        ww_lower_norm, ww_upper_norm  = _importance_map_to_weight_windows(importance_map, ww_lower_upper_ratio) #[n_energy_groups, n_spacing]
+        ww_lower_norm, ww_upper_norm  = _importance_map_to_weight_windows(importance_map, ww_lower_upper_ratio) #[n_energy_groups,]
         print(ww_lower_norm.shape)
         
     
