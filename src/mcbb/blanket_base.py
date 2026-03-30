@@ -193,7 +193,9 @@ class OpenMCBlanketSimulation(ABC):
       
     def plot_geometry(self,  basis, slice_coord):
         plots = openmc.Plot.from_geometry(self.geometry, basis = basis, slice_coord=slice_coord)
-        plots.color_by = 'material'
+        #plots.color_by = 'material'
+        self.materials.export_to_xml()
+        self.geometry.export_to_xml()
         openmc.plot_inline(plots)
         
 

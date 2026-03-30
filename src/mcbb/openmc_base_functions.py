@@ -1,6 +1,6 @@
 import openmc 
 import numpy as np
-from typing import List, Iterable, Tuple
+from typing import List, Iterable, Tuple, Literal
 import jax.numpy as jnp
 
 def create_openmc_settings(batches : int, samples : int, source : openmc.SourceBase, verbosity : int = 1, seed : int = None, weight_windows : openmc.WeightWindows = None):
@@ -330,3 +330,28 @@ def tetrahedral_mesh_importance_to_openmc_weight_window(mesh : Tuple[jnp.ndarray
     openmc_mesh = tetrahedral_mesh_to_openmc_mesh(mesh, filename, name, conversion_factor)
     weight_windows = importance_map_to_weight_window(importance_map, group_boundaries = group_boundaries, mesh = openmc_mesh, ww_lower_upper_ratio = ww_lower_upper_ratio, **kwargs)
     return weight_windows
+
+import functools
+import os
+@functools.lru_cache(maxsize=2)
+def _get_tally_results_divisor(sp_file : os.PathLike,  tally_names : Iterable[str], quantities : List[Literal["mean", "std_dev", "rel_err"]] = ["mean"]):
+    result = {}
+    with openmc.StatePoint(sp_file) as sp:           
+        for tally in tally_names:
+            sp_tally = sp.get_tally(name = tally) 
+            mesh_data    = sp_tally.find_filter(openmc.MeshFilter).mesh # assume all are on mesh
+            result[sp_tally.name] = {}
+            for quantity in quantities:
+                if quantity not in ["mean", "std_dev", "rel_err"]:
+                    raise ValueError(f"Quantity {quantity} not recognized. Valid options are 'mean', 'std_dev', and 'rel_err'.")
+                result_key = f"{tally}_{quantity}"
+
+                if quantity == "rel_err":
+                    divisor = 1.0
+                else:
+                    divisor = onp.abs(mesh_data.volumes[:, None]) #[vol, eg]
+
+                
+                result[sp_tally.name][quantity] = onp.flip(sp_tally.get_reshaped_data(quantity)[..., 0,0],axis=1) / divisor
+
+    return result
