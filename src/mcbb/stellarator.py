@@ -1,6 +1,6 @@
 from mcbb.linear_blanket import Blanket1D
 
-from .blanket_base import OpenMCBlanketSimulation, Blanket, OpenMCSettingsBlanket
+from .blanket_base import OpenMCBlanketSimulation, Blanket, OpenMCSettingsBlanket, _core_dict
 from .openmc_base_functions import _get_tally_results_divisor
 from jax_sbgeom.flux_surfaces import ParametrisedSurface, ToroidalExtent, FluxSurface, FluxSurfaceExtendedDistanceMatrix, FluxSurfaceNormalExtendedNoPhi
 from jax_sbgeom.interfaces.blanket_creation import LayeredDiscreteBlanket
@@ -93,17 +93,45 @@ class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
     def tally_mesh(self):
         return self.discrete_blanket.volume_mesh(self.parametrised_surface)
     
-
+    @cached_property 
+    def tally_mesh_openmc(self):
     
-    @cached_property
-    def tallies(self):        
         tally_mesh_filename = self.filename_start + "_tally_source_mesh.h5m"
 
         tally_mesh_tetra = self.tally_mesh
         jsb.interfaces.dagmc_interface.tetrahedral_mesh_to_moab_mesh(*tally_mesh_tetra).write_file(tally_mesh_filename)
+        print(tally_mesh_filename)
+        return openmc.UnstructuredMesh(filename=tally_mesh_filename, library="moab", name = 'BaseMesh')
 
-        umesh_tally = openmc.UnstructuredMesh(filename=tally_mesh_filename, library="moab", name = 'TallyMesh')
-        mesh_filter = openmc.MeshFilter(umesh_tally)
+        
+    def with_weight_windows(self, weight_windows : openmc.WeightWindows):        
+        raise NotImplementedError("This method is not implemented for the StellaratorOpenMCBlanketSimulation class. Use add_weight_windows instead to ensure the weight window mesh is the same as the tally mesh.")
+    
+    def add_weight_windows(self, weight_windows : openmc.WeightWindows):
+        '''
+        Add weight windows to the simulation. This method is used instead of with_weight_windows to ensure that the weight windows are added to the same mesh as the tally and source.
+
+        Parameters
+        ----------
+        weight_windows : openmc.WeightWindows
+            The weight windows to use in the new simulation object
+        Returns
+        -------
+        new_simulation : OpenMCBlanketSimulation
+            A new OpenMCBlanketSimulation object with the same geometry, materials, and tallies as the original, but with the specified weight windows in the settings
+        -------
+        
+        '''
+        try:
+            del self.settings
+        except AttributeError:
+            pass # settings have not been created yet, so we can just set the weight windows without worrying about deleting the cached property
+        self.settings_blanket.weight_windows = weight_windows
+    
+    @cached_property
+    def tallies(self):        
+        
+        mesh_filter = openmc.MeshFilter(self.tally_mesh_openmc)
         energy_filter = openmc.EnergyFilter(self.energy_bins)
 
         tally_flux = openmc.Tally(name='FluxTally')
@@ -149,49 +177,79 @@ class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
         reaction_rates_volume_weighted = onp.array(source_on_mesh * tet_volumes)
         
         openmc_mesh_sources            = onp.frompyfunc(make_source, 1, 1)(reaction_rates_volume_weighted)        
-        return openmc.MeshSource(self.tallies[0].filters[0].mesh, openmc_mesh_sources)
-        
-
-    def get_tally_results(self, sp_file : Union[str, None] = None, quantities : List[Literal["mean", "std_dev", "rel_err"]] = ["mean"]):
+        return openmc.MeshSource(self.tally_mesh_openmc, openmc_mesh_sources)
+    def _norm_sp_file(self,  sp_file : Union[os.PathLike, None] ):
         if sp_file is None:
             try:
                 sp_file = self.sp_file
             except AttributeError:
                 raise AttributeError("No statepoint file provided and simulation has not been run yet. Please run the simulation first or provide a specific statepoint file.")
+        return sp_file
 
+    def get_tally_results(self, sp_file : Union[os.PathLike, None] = None, quantities : List[Literal["mean", "std_dev", "rel_err"]] = ["mean"]):
+        
+        sp_file = self._norm_sp_file(sp_file)
+        
         return _get_tally_results_divisor(sp_file, tuple(tally.name for tally in self.tallies), tuple(quantities))
     
-    def _create_1d_importance_map(self, data_dict : Dict, distance_samples : jnp.ndarray, degree = 3, tn_order = 3, n_elem_per_region = 5):
+    def _create_1d_importance_map(self, data_dict : Dict, distance_samples : jnp.ndarray, degree = 3, tn_order = 3, n_elem_per_region = 5, **kwargs):
         from .sn.base_sn import create_importance_map_for_blanket            
-        return create_importance_map_for_blanket(self.blanket, data_dict, [n_elem_per_region for i in range(len(self.blanket.layers))], degree = degree, tn_order = tn_order,s_values_blanket = distance_samples)
+        return create_importance_map_for_blanket(self.blanket, data_dict, [n_elem_per_region for i in range(len(self.blanket.layers))], degree = degree, tn_order = tn_order,s_values_blanket = distance_samples, **kwargs)
 
-    def _create_1d_importance_map_radial(self, data_dictionary : Dict, degree = 3, tn_order = 3, n_elem_per_region = 5):
+    def _create_1d_importance_map_radial(self, data_dictionary : Dict, degree = 3, tn_order = 3, n_elem_per_region = 5, **kwargs):
 
         d_physical = self.discrete_blanket.map_to_physical_spacing(jnp.cumsum(jnp.array(self.blanket.thicknesses)))
 
-        return d_physical, self._create_1d_importance_map(data_dictionary, d_physical, degree, tn_order, n_elem_per_region)
+        return d_physical, self._create_1d_importance_map(data_dictionary, d_physical, degree, tn_order, n_elem_per_region, **kwargs)
     
-    def create_weight_windows(self, data_dictionary : Dict, degree  : int = 3, tn_order : int = 3, n_elem_per_region : int = 5, ww_lower_upper_ratio : int = 3):
-        from .openmc_base_functions import _importance_map_to_weight_windows
-        d_physical, importance_map = self._create_1d_importance_map_radial(data_dictionary, degree, tn_order, n_elem_per_region)
+    def create_weight_windows(self, data_dictionary : Dict, energy_groups : Iterable[float], degree  : int = 3, tn_order : int = 3, n_elem_per_region : int = 5, ww_lower_upper_ratio : int = 3, ww_kwargs : Dict = {"max_split" : 2000}, **kwargs):
+        '''
+        Creates weight windows for the blanket based on a forward-weighted CADIS importance map of a 1D blanket using the average thicknesses. 
+        The weight windows are on the same mesh as the tally and the source. This reduces overhead of the mesh localization.
 
-        ww_lower_norm, ww_upper_norm  = _importance_map_to_weight_windows(importance_map, ww_lower_upper_ratio) #[n_energy_groups,]
-        print(ww_lower_norm.shape)
+        Parameters:
+        ----------
+        data_dictionary : Dict
+            A dictionary containing any additional data required to create the importance map. This is assumed to have the same keys as the blanket.layer_names property. The dictionary 
+            values are a tuple of (total_cross_section, scattering_cross_section), where total_cross section is of shape [n_groups] and scattering_cross_section is of shape [l_order, n_groups, n_groups].
         
-    
             
 
-    # @cached_property    
-    # def fast_flux(self):
-    #     from blanket_parametrisation import GROUPS_LIST
+        degree : int
+            The degree of the finite element basis to use for the importance map generation. Default is 3.
+        tn_order : int
+            The order of the Tn quadrature to use for the importance map generation. Default is 3.
+        n_elem_per_region : int
+            The number of finite elements to use per region in the importance map generation. Default is 5.
+        ww_lower_upper_ratio : int
+            The ratio of the lower to upper weight window values. Default is 3, meaning the upper weight window value is 3 times the lower weight window value. 
+        **kwargs : dict
+            Any additional keyword arguments to pass to the importance map generation function (which passes it directly to the multigroup operator creation, so it can be used to set different operators for the 
+            multigroup operator, e.g. TransportOperatorVmapPallas instead of TransportOperatorVmap).
+        '''
+        from .openmc_base_functions import importance_map_to_weight_window
+        assert onp.all(onp.sort(energy_groups)[::-1] == onp.array(energy_groups)), "Energy groups must be in descending order for this function (it uses the same ordering as jax-sn, namely descending). It is then automatically converted to OpenMC format (ascending)"
+        d_physical, importance_map = self._create_1d_importance_map_radial(data_dictionary, degree, tn_order, n_elem_per_region, **kwargs)
+
+        importance_map = jnp.where(d_physical < self.blanket.average_thicknesses[0], jnp.nan, importance_map) # set importance map to nan in the plasma region, as we do not want to generate weight windows there.
+        # They will be automatically set to the maximum weight window value.
+
+        importance_map_element_wise = 0.5 * (importance_map[..., 1:] + importance_map[..., :-1]) # map to element-wise values by averaging the importance map at the element boundaries. 
+
+        return importance_map_to_weight_window(self.discrete_blanket.volume_mesh_structure.map_radial_array_to_layers(importance_map_element_wise), energy_groups, self.tally_mesh_openmc, ww_lower_upper_ratio, **ww_kwargs)
 
 
-    #     tally_results = self.get_tally_results()
-    #     overlap_matrix = jax_sn.energy_set.compute_overlap_matrix(GROUPS_LIST, [15.2e6, 1e6])
+    
+    def fast_flux(self, energy_groups, sp_file : Union[os.PathLike, None] = None):
+        from jax_sn.energy_set import compute_overlap_matrix
+        sp_file = self._norm_sp_file(sp_file)
+        
+        tally_results = self.get_tally_results(sp_file)
+        overlap_matrix = compute_overlap_matrix(energy_groups, [15.2e6, 1e6])
         
 
-    #     fast_flux = jnp.einsum("ij, kj -> ik", overlap_matrix, tally_results['FluxTally']['mean'] )[0]
-    #     return fast_flux
+        fast_flux = jnp.einsum("ij, kj -> ik", overlap_matrix, tally_results['FluxTally']['mean'] )[0]
+        return fast_flux
 
 def generate_flux_surface_source(flux_surface : ParametrisedSurface, s_spacing : jnp.ndarray, source_callable : Callable[[jnp.ndarray], jnp.ndarray], n_theta : int, n_phi : int, toroidal_extent : ToroidalExtent, source_mesh_filename : str):
     '''

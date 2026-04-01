@@ -38,8 +38,7 @@ class Blanket(ABC):
         The first layer is expected to be the plasma, and the rest are the blanket layers.'''
         ...
 
-    @property 
-    
+    @property     
     def average_thickness(self):
         '''
         Average thickness of the entire blanket, in meters. 
@@ -50,6 +49,10 @@ class Blanket(ABC):
     @property
     def n_layers(self):
         return len(self.layers)
+    
+    @property
+    def layer_names(self):
+        return [layer.name for layer in self.layers]
 
 
 @dataclass

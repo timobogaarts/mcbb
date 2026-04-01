@@ -172,10 +172,12 @@ def _importance_map_to_weight_windows(importance_map : jnp.ndarray, ww_lower_upp
     '''
     Maps a importance map to weight windows.
 
+    Non-meaningful values (e.g. nan values or negative values)are automatically set to the maximum weight window value. This is different than no weight windows.
+
     Parameters
     ----------
     importance_map : jnp.ndarray
-        An importance map. Arbitrarily shaped (computation don't depend on specific shape)
+        An importance map. Arbitrarily shaped (computation doesn't depend on specific shape)
 
     ww_lower_upper_ratio : int
         The ratio of the upper weight window to the lower weight window (default is 3)
@@ -187,8 +189,7 @@ def _importance_map_to_weight_windows(importance_map : jnp.ndarray, ww_lower_upp
     ww_upper_norm : jnp.ndarray
         The normalised upper weight window values corresponding to the importance map
     '''
-
-    ww_lower = jnp.zeros_like(importance_map)
+    
 
     importance_map_safe = jnp.where(importance_map > 0, importance_map, 1e-10)
 
@@ -196,6 +197,9 @@ def _importance_map_to_weight_windows(importance_map : jnp.ndarray, ww_lower_upp
     max_ww_value = jnp.max(ww_lower)
 
     ww_lower_norm  = ww_lower / (max_ww_value * (1.0 + ww_lower_upper_ratio ) /2.0 ) # normalise so avg is 1
+
+    ww_lower_norm = jnp.where(ww_lower_norm == 0, jnp.max(ww_lower_norm), ww_lower_norm)
+    
     
     return ww_lower_norm, ww_lower_norm * ww_lower_upper_ratio
 
@@ -266,8 +270,7 @@ def importance_map_to_weight_window(importance_map : jnp.ndarray, group_boundari
     assert importance_map.shape[0] == np.array(group_boundaries).shape[0] - 1, "The first dimension of the importance map should match the number of energy groups (group boundaries - 1)"
 
     openmc_importance_map, group_boundaries_openmc = _convert_to_openmc_format(importance_map, group_boundaries)
-    ww_lower_norm, ww_upper_norm                   = _importance_map_to_weight_windows(openmc_importance_map, ww_lower_upper_ratio)    #[mesh.shape, n_groups]        
-
+    ww_lower_norm, ww_upper_norm                   = _importance_map_to_weight_windows(openmc_importance_map, ww_lower_upper_ratio)    #[mesh.shape, n_groups]            
     weight_windows = openmc.WeightWindows(mesh, lower_ww_bounds = np.array(ww_lower_norm), upper_ww_bounds = np.array(ww_upper_norm), energy_bounds = np.array(group_boundaries_openmc), particle_type = "neutron", **kwargs)
 
     return weight_windows
@@ -295,7 +298,7 @@ def tetrahedral_mesh_to_dagmc_file(mesh : Tuple[jnp.ndarray, jnp.ndarray], filen
     assert mesh[1].shape[1] == 4, "Connectivity should be of shape [n_elements, 4] for tetrahedral elements"
     from jax_sbgeom.interfaces.dagmc_interface import tetrahedral_mesh_to_moab_mesh
 
-    tetrahedral_mesh_to_moab_mesh(*mesh, conversion_factor).write_file(filename)
+    tetrahedral_mesh_to_moab_mesh(*mesh, conversion_factor).write_file(filename)    
     return filename
 
 
@@ -336,6 +339,7 @@ import os
 @functools.lru_cache(maxsize=2)
 def _get_tally_results_divisor(sp_file : os.PathLike,  tally_names : Iterable[str], quantities : List[Literal["mean", "std_dev", "rel_err"]] = ["mean"]):
     result = {}
+    
     with openmc.StatePoint(sp_file) as sp:           
         for tally in tally_names:
             sp_tally = sp.get_tally(name = tally) 
@@ -349,9 +353,9 @@ def _get_tally_results_divisor(sp_file : os.PathLike,  tally_names : Iterable[st
                 if quantity == "rel_err":
                     divisor = 1.0
                 else:
-                    divisor = onp.abs(mesh_data.volumes[:, None]) #[vol, eg]
+                    divisor = np.abs(mesh_data.volumes[:, None]) #[vol, eg]
 
                 
-                result[sp_tally.name][quantity] = onp.flip(sp_tally.get_reshaped_data(quantity)[..., 0,0],axis=1) / divisor
+                result[sp_tally.name][quantity] = np.flip(sp_tally.get_reshaped_data(quantity)[..., 0,0],axis=1) / divisor # flip to descending again
 
     return result
