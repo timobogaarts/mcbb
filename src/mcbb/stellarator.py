@@ -199,7 +199,7 @@ class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
     def _create_1d_importance_map_radial(self, data_dictionary : Dict, degree = 3, tn_order = 3, n_elem_per_region = 5, **kwargs):
 
         d_physical = self.discrete_blanket.map_to_physical_spacing(jnp.cumsum(jnp.array(self.blanket.thicknesses)))
-
+        
         return d_physical, self._create_1d_importance_map(data_dictionary, d_physical, degree, tn_order, n_elem_per_region, **kwargs)
     
     def create_weight_windows(self, data_dictionary : Dict, energy_groups : Iterable[float], degree  : int = 3, tn_order : int = 3, n_elem_per_region : int = 5, ww_lower_upper_ratio : int = 3, ww_kwargs : Dict = {"max_split" : 2000}, **kwargs):
@@ -228,7 +228,7 @@ class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
             multigroup operator, e.g. TransportOperatorVmapPallas instead of TransportOperatorVmap).
         '''
         from .openmc_base_functions import importance_map_to_weight_window
-        assert onp.all(onp.sort(energy_groups)[::-1] == onp.array(energy_groups)), "Energy groups must be in descending order for this function (it uses the same ordering as jax-sn, namely descending). It is then automatically converted to OpenMC format (ascending)"
+        assert onp.all(onp.sort(energy_groups)[::-1] == onp.array(energy_groups)), "Energy groups must be in descending order for this function (it uses the same ordering as jax-sn, namely descending). It is then automatically converted to OpenMC format (ascending)"        
         d_physical, importance_map = self._create_1d_importance_map_radial(data_dictionary, degree, tn_order, n_elem_per_region, **kwargs)
 
         importance_map = jnp.where(d_physical < self.blanket.average_thicknesses[0], jnp.nan, importance_map) # set importance map to nan in the plasma region, as we do not want to generate weight windows there.
@@ -238,9 +238,13 @@ class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
 
         return importance_map_to_weight_window(self.discrete_blanket.volume_mesh_structure.map_radial_array_to_layers(importance_map_element_wise), energy_groups, self.tally_mesh_openmc, ww_lower_upper_ratio, **ww_kwargs)
 
+    def tritium_breeding_ratio(self, sp_file : Union[os.PathLike, None] = None):
+        sp_file = self._norm_sp_file(sp_file)
+
 
     
     def fast_flux(self, energy_groups, sp_file : Union[os.PathLike, None] = None):
+        print(sp_file)
         from jax_sn.energy_set import compute_overlap_matrix
         sp_file = self._norm_sp_file(sp_file)
         
@@ -296,7 +300,7 @@ def generate_flux_surface_source(flux_surface : ParametrisedSurface, s_spacing :
 
     radial_source_midpoint = (radial_source[:-1] + radial_source[1:])/2
 
-    source_mesh            = jsb.flux_surfaces.mesh_tetrahedra(flux_surface, s_spacing, n_theta, n_phi, toroidal_extent)
+    source_mesh            = jsb.flux_surfaces.mesh_tetrahedra(flux_surface, s_spacing, toroidal_extent, n_theta, n_phi)
 
 
     structure              = jsb.interfaces.blanket_creation.BlanketMeshStructure(n_theta, n_phi, s_spacing.shape[0], True, toroidal_extent.full_angle())

@@ -41,7 +41,7 @@ def setup_linear_symm_mgop(blanket : Blanket, data_dictionary : Dict[str, Tuple[
     solution_domain = jax_sn.solution_domain.SolutionDomain.from_element_and_domain(
         element = element,
         domain = Domain.from_mesh_and_cross_sections((verts, conn), element.face_template, cross_section_idx)
-    )
+    )    
 
     source_basis = jnp.repeat(source, repeats = solution_domain.n_basis, axis = -1).reshape(-1, solution_domain.n_basis)
 

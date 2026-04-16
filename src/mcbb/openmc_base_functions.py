@@ -338,6 +338,42 @@ import functools
 import os
 @functools.lru_cache(maxsize=2)
 def _get_tally_results_divisor(sp_file : os.PathLike,  tally_names : Iterable[str], quantities : List[Literal["mean", "std_dev", "rel_err"]] = ["mean"]):
+    '''
+    Obtains the results in a statepoint file for a set of Tally names and quantities. 
+
+    Divides them by the mesh volume to get a scalar flux in units of 1/cm^-2 /s. Only useful for a mesh-based tally. 
+
+    Flips energy groups to descending as well and adds the energy bins (assumed to be continuous; no gaps) to a single 'energy_groups' key in the result dictionary.
+
+    Parameters
+    ----------
+    sp_file : os.PathLike
+        The path to the OpenMC statepoint file containing the tally results.
+    tally_names : Iterable[str]
+        A list of tally names to extract from the statepoint file.
+    quantities : List[Literal["mean", "std_dev", "rel_err"]]
+        A list of quantities to extract for each tally. Valid options are 'mean', 'std_dev', and 'rel_err'. Default is ['mean'].    
+    Returns
+    -------
+    result : dict
+        A dictionary containing the extracted tally results for each specified tally and quantity, divided by the mesh volume to obtain scalar flux values in units of 1/cm^-2/s. The structure of the dictionary is as follows:
+        {
+            tally_name_1: {
+                quantity_1: np.ndarray of shape [mesh.shape, n_groups],
+                quantity_2: np.ndarray of shape [mesh.shape, n_groups],
+                ...
+                'energy_groups': np.ndarray of shape [n_groups + 1] containing the energy group boundaries in descending order
+            },
+            tally_name_2: {
+                quantity_1: np.ndarray of shape [mesh.shape, n_groups],
+                quantity_2: np.ndarray of shape [mesh.shape, n_groups],
+                ...
+                'energy_groups': np.ndarray of shape [n_groups + 1] containing the energy group boundaries in descending order
+            },
+            ...
+        }   
+                
+    '''
     result = {}
     
     with openmc.StatePoint(sp_file) as sp:           
@@ -347,8 +383,7 @@ def _get_tally_results_divisor(sp_file : os.PathLike,  tally_names : Iterable[st
             result[sp_tally.name] = {}
             for quantity in quantities:
                 if quantity not in ["mean", "std_dev", "rel_err"]:
-                    raise ValueError(f"Quantity {quantity} not recognized. Valid options are 'mean', 'std_dev', and 'rel_err'.")
-                result_key = f"{tally}_{quantity}"
+                    raise ValueError(f"Quantity {quantity} not recognized. Valid options are 'mean', 'std_dev', and 'rel_err'.")                
 
                 if quantity == "rel_err":
                     divisor = 1.0
@@ -357,5 +392,12 @@ def _get_tally_results_divisor(sp_file : os.PathLike,  tally_names : Iterable[st
 
                 
                 result[sp_tally.name][quantity] = np.flip(sp_tally.get_reshaped_data(quantity)[..., 0,0],axis=1) / divisor # flip to descending again
+            try:
+                energy_groups = sp_tally.find_filter(openmc.EnergyFilter).bins
+                assert np.allclose(energy_groups[:-1, 1], energy_groups[1:, 0]), "Energy bins are not continuous; cannot add into result dictionary"
+                assert np.all(     energy_groups[:-1, 0] < energy_groups[1:, 0]), "Energy bins are not descending"
+                result[sp_tally.name]['energy_groups'] = np.flip(np.append(energy_groups[:, 0], energy_groups[-1, 1]))
+            except:
+                pass
 
     return result
