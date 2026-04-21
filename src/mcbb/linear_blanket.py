@@ -149,16 +149,39 @@ def _create_1D_geometry(blanket : Blanket, size_yz : float, prism_boundary_type 
 
 
 def _create_1D_geometry_symmetrized(blanket : Blanket, size_yz : float, prism_boundary_type : str, plasma_boundary_type : str, material_list : List[openmc.Material]) -> openmc.Geometry:
+    '''
+    Symmetrized geometry around the plasma. If there is no plasma, the geometry is symmetrized completely, including a double sized first layer.
+
+    Parameters
+    ----------
+    blanket : Blanket
+        The blanket object containing the layers and their properties
+    size_yz : float
+        The size of the geometry in the y and z directions, in meters
+    prism_boundary_type : str
+        The boundary type for the prism in the y and z directions (e.g., 'reflective', 'vacuum', etc.)
+    plasma_boundary_type : str
+        The boundary type for the plasma layer (e.g., 'reflective', 'vacuum', etc.). Unused here.
+    material_list : List[openmc.Material]
+        The list of OpenMC materials corresponding to the layers in the blanket, in the same order as the layers in the blanket
+    Returns
+    -------
+    geom : openmc.Geometry
+        The OpenMC geometry object for the symmetrized 1D blanket
+    -------
+    '''
     import openmc
     import numpy as np
 
     is_blanket_layers = [isinstance(i, BlanketLayer1D) for i in blanket.layers]
     if not all(is_blanket_layers):
         raise ValueError("All layers in the blanket must be of type BlanketLayer1D to create a 1D geometry.")
-        
+            
     prism = openmc.model.RectangularPrism(size_yz * 100.0, size_yz * 100.0, boundary_type=prism_boundary_type, axis = 'x')    
-    cumsum_values = np.cumsum([layer_i.thickness for layer_i in blanket.layers])
+    cumsum_values = np.cumsum([layer_i.thickness / 2.0 if layer_i.name == "Plasma" else layer_i.thickness for layer_i in blanket.layers])
     cumulative_thicknessess =list(-np.flip(cumsum_values)) +list(cumsum_values)
+
+    cumulative_thicknessess = np.array(cumulative_thicknessess) - np.min(cumulative_thicknessess)  # shift so that the minimum is at 0, ensuring the first layer starts at 0
     
     enddict  = [openmc.XPlane(x0 = j * 100) for j in cumulative_thicknessess]
     enddict[0].boundary_type  = 'vacuum'  

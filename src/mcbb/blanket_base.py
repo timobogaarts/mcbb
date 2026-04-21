@@ -206,7 +206,34 @@ class OpenMCBlanketSimulation(ABC):
         self.sp_file = sp_file
 
         return mgxs_lib
-      
+    
+    def create_mgxs_data_dict(self, energy_groups : Iterable[float], legendre_order : int, extra_types : List[str] = ['(n,Xt)', 'heating'], conversion_factor = 100):
+        '''
+        Convenience function that instead of creating a native OpenMC multi-group cross-section library, creates a dictionary of the multi-group cross-section data         
+        in the format specified by the mgxs_lib_to_data_dicts function in openmc_base_functions.py, which can be more convenient 
+
+        Parameters
+        ----------
+        legendre_order : int
+            The Legendre order for the multi-group cross-section library
+        energy_groups : Iterable[float]
+            The energy group boundaries for the multi-group cross-section library, ordered from low to high
+        extra_types : List[str]
+            A list of extra multi-group cross-section types to include in the library (default is ['(n,Xt)', 'heating'])
+        conversion_factor : float
+            A factor to convert the multi-group cross-section data to the desired units (default is 100, which converts from cm to m for the cross-sections)
+        
+        Returns
+        -------
+        mgxs_dict : dict
+                A dictionary containing the multi-group cross-section data in a standard format
+        
+        -------
+        '''
+        from .openmc_base_functions import mgxs_lib_to_data_dicts
+        mgxs_lib = self.create_mgxs_library(energy_groups, legendre_order, extra_types)
+        return mgxs_lib_to_data_dicts(mgxs_lib, conversion_factor=conversion_factor)
+
     def plot_geometry(self,  basis, slice_coord):
         plots = openmc.Plot.from_geometry(self.geometry, basis = basis, slice_coord=slice_coord)
         #plots.color_by = 'material'

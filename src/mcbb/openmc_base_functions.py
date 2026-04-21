@@ -72,7 +72,7 @@ def create_mgxs_lib(openmc_geometry : openmc.Geometry, egroups : Iterable[float]
     '''
     
     mgxs_lib                = openmc.mgxs.Library(openmc_geometry)
-    mgxs_lib.energy_groups  = openmc.mgxs.EnergyGroups(egroups) # from low to high??
+    mgxs_lib.energy_groups  = openmc.mgxs.EnergyGroups(egroups) 
     mgxs_lib.mgxs_types     = ['total', 'absorption', 'nu-fission', 'fission','nu-scatter matrix', 'multiplicity matrix', 'chi', 'scatter', 'nu-scatter', 'scatter matrix']  + extra_types
     mgxs_lib.domain_type    = "material"
     mgxs_lib.domain         = list(openmc_geometry.get_all_materials().values())

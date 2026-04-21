@@ -93,6 +93,10 @@ class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
     def tally_mesh(self):
         return self.discrete_blanket.volume_mesh(self.parametrised_surface)
     
+    @cached_property
+    def tally_mesh_volumes(self):
+        return jsb.jax_utils.mesh.volumes_tetrahedra(*self.tally_mesh)
+    
     @cached_property 
     def tally_mesh_openmc(self):
     
@@ -237,21 +241,32 @@ class StellaratorOpenMCBlanketSimulation(OpenMCBlanketSimulation):
         importance_map_element_wise = 0.5 * (importance_map[..., 1:] + importance_map[..., :-1]) # map to element-wise values by averaging the importance map at the element boundaries. 
 
         return importance_map_to_weight_window(self.discrete_blanket.volume_mesh_structure.map_radial_array_to_layers(importance_map_element_wise), energy_groups, self.tally_mesh_openmc, ww_lower_upper_ratio, **ww_kwargs)
+    
+
 
     def tritium_breeding_ratio(self, sp_file : Union[os.PathLike, None] = None):
         sp_file = self._norm_sp_file(sp_file)
 
+        tally_results = self.get_tally_results(sp_file, quantities = ["mean"])
+        assert 'TBRTally' in tally_results, f"TBRTally not found in tally results. Available tallies are: {list(tally_results.keys())}"
+
+
+        
+        return onp.sum(tally_results['TBRTally']['mean'] * self.tally_mesh_volumes[:, None] * 1e6 ) / self.source.strength
+
 
     
-    def fast_flux(self, energy_groups, sp_file : Union[os.PathLike, None] = None):
-        print(sp_file)
+    def fast_flux(self, sp_file : Union[os.PathLike, None] = None, fast_flux_groups = [15.2e6, 1e6]):
+        
         from jax_sn.energy_set import compute_overlap_matrix
         sp_file = self._norm_sp_file(sp_file)
         
         tally_results = self.get_tally_results(sp_file)
-        overlap_matrix = compute_overlap_matrix(energy_groups, [15.2e6, 1e6])
-        
+        assert 'FluxTally' in tally_results, f"FluxTally not found in tally results. Available tallies are: {list(tally_results.keys())}"
+        assert 'energy_groups' in tally_results['FluxTally'], f"Energy groups not found in FluxTally results. Please ensure that the energy groups are included in the tally results. Available keys in FluxTally results are: {list(tally_results['FluxTally'].keys())}"
 
+        energy_groups = tally_results['FluxTally']['energy_groups']
+        overlap_matrix = compute_overlap_matrix(energy_groups, fast_flux_groups)        
         fast_flux = jnp.einsum("ij, kj -> ik", overlap_matrix, tally_results['FluxTally']['mean'] )[0]
         return fast_flux
 
