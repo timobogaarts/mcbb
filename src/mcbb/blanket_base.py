@@ -158,17 +158,18 @@ class OpenMCBlanketSimulation(ABC):
         self.sp_file = sp_file
         return sp_file
 
-    def _setup_mgxs_lib(self, egroups : Iterable[float], legendre_order : int, extra_types  : List[str] = ['(n,Xt)', 'heating']):
+    def _setup_mgxs_lib(self, egroups : Iterable[float], legendre_order : int, extra_types  : List[str] = ['(n,Xt)', 'heating'], per_nuclide : bool = False):
         from .openmc_base_functions import create_mgxs_lib
         mgxs_lib = create_mgxs_lib(
             openmc_geometry = self.geometry,
             egroups         = egroups,
             legendre_order  = legendre_order,
-            extra_types     = extra_types
+            extra_types     = extra_types,
+            per_nuclide     = per_nuclide
         )
         return mgxs_lib
     
-    def create_mgxs_library(self,  energy_groups : Iterable[float], legendre_order : int, extra_types : List[str] = ['(n,Xt)', 'heating']):
+    def create_mgxs_library(self,  energy_groups : Iterable[float], legendre_order : int, extra_types : List[str] = ['(n,Xt)', 'heating'], per_nuclide : bool = False):
         '''
         Function to create a multi-group cross-section library for the OpenMC simulation
 
@@ -191,7 +192,7 @@ class OpenMCBlanketSimulation(ABC):
         
         -------
         '''
-        mgxs_lib = self._setup_mgxs_lib(energy_groups, legendre_order, extra_types)
+        mgxs_lib = self._setup_mgxs_lib(energy_groups, legendre_order, extra_types, per_nuclide = per_nuclide)
 
         tallies_copy = self.tallies[:]
         tallies_omc = openmc.Tallies(tallies_copy)
@@ -207,7 +208,7 @@ class OpenMCBlanketSimulation(ABC):
 
         return mgxs_lib
     
-    def create_mgxs_data_dict(self, energy_groups : Iterable[float], legendre_order : int, extra_types : List[str] = ['(n,Xt)', 'heating'], conversion_factor = 100):
+    def create_mgxs_data_dict(self, energy_groups : Iterable[float], legendre_order : int, extra_types : List[str] = ['(n,Xt)', 'heating'], conversion_factor = 100, per_nuclide : bool = False):
         '''
         Convenience function that instead of creating a native OpenMC multi-group cross-section library, creates a dictionary of the multi-group cross-section data         
         in the format specified by the mgxs_lib_to_data_dicts function in openmc_base_functions.py, which can be more convenient 
@@ -231,7 +232,7 @@ class OpenMCBlanketSimulation(ABC):
         -------
         '''
         from .openmc_base_functions import mgxs_lib_to_data_dicts
-        mgxs_lib = self.create_mgxs_library(energy_groups, legendre_order, extra_types)
+        mgxs_lib = self.create_mgxs_library(energy_groups, legendre_order, extra_types, per_nuclide=per_nuclide)
         return mgxs_lib_to_data_dicts(mgxs_lib, conversion_factor=conversion_factor)
 
     def plot_geometry(self,  basis, slice_coord):

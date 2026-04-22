@@ -49,7 +49,7 @@ def create_openmc_settings(batches : int, samples : int, source : openmc.SourceB
     return settings
 
 
-def create_mgxs_lib(openmc_geometry : openmc.Geometry, egroups : Iterable[float], legendre_order : int, extra_types  : List[str] = ['(n,Xt)', 'heating']):    
+def create_mgxs_lib(openmc_geometry : openmc.Geometry, egroups : Iterable[float], legendre_order : int, extra_types  : List[str] = ['(n,Xt)', 'heating'], per_nuclide : bool = False):    
     '''
     Function to create a openmc.mgxs.Library for generating multigroup cross sections in the 1D breeding blanket simulation.
     
@@ -77,7 +77,7 @@ def create_mgxs_lib(openmc_geometry : openmc.Geometry, egroups : Iterable[float]
     mgxs_lib.domain_type    = "material"
     mgxs_lib.domain         = list(openmc_geometry.get_all_materials().values())
     mgxs_lib.correction     = None
-    mgxs_lib.by_nuclide     = False
+    mgxs_lib.by_nuclide     = per_nuclide
     mgxs_lib.legendre_order = legendre_order
 
     mgxs_lib.check_library_for_openmc_mgxs()
@@ -87,17 +87,21 @@ def create_mgxs_lib(openmc_geometry : openmc.Geometry, egroups : Iterable[float]
 
 def mgxs_lib_to_standard_formatting(mgxs_lib : openmc.mgxs.Library, conversion_factor = 100.0):
     '''
-    Function to convert an OpenMC mgxs.Library to a standard dictionary format for easier use
+    Function to convert an OpenMC mgxs.Library to a standard dictionary format for easier use.
+
+    Works also when the library is per nuclide. Reverts all axes such that nuclides are also put to the front if 
+    present.
     
     This converts it to the following format:
 
-    sigma_l_gout_gin = [l, g_out, g_in] 
+    sigma_l_gout_gin = [(n_nuclides), l, g_out, g_in] 
 
     instead of the normal OpenMC format of
 
-    [g_in, g_out, l]
+    [g_in, g_out, l, (n_nuclides)]
 
-    also applies a conversion factor
+    also applies a conversion factor.
+
 
 
     Parameters
@@ -116,14 +120,16 @@ def mgxs_lib_to_standard_formatting(mgxs_lib : openmc.mgxs.Library, conversion_f
     '''
     ignored_types = ['scatter matrix', 'multiplicity', 'chi']
 
+
+
     mgxs_dict = {}
     for mat in mgxs_lib.domain:
         mat_dict = {}
         for type_i in (t for t in mgxs_lib.mgxs_types if t not in ignored_types):                        
             data = mgxs_lib.get_mgxs(mat, type_i).get_xs() * conversion_factor
-            if type_i == "nu-scatter matrix":
-                data = data.transpose(2,1,0)
-            mat_dict[type_i] = data
+            if mgxs_lib.by_nuclide and len(mat.nuclides) == 1:                
+                data = data[..., None] # if by nuclide but only 1 nuclide, insert a nuclide axis for consistency with others
+            mat_dict[type_i] = data.T
 
         mgxs_dict[mat.name] = mat_dict
     return mgxs_dict
@@ -165,6 +171,32 @@ def mgxs_lib_to_data_dicts(mgxs_lib : openmc.mgxs.Library, conversion_factor = 1
     aux_data_dict = {key : {k : mgxs_dict[key][k] for k in mgxs_dict[key].keys() if k not in ['total', 'nu-scatter matrix']} for key in mgxs_dict.keys()}
 
     return total_scat_data, aux_data_dict
+
+def data_dict_per_nuclide_to_total(mgxs_dict : dict):
+    '''
+    Converts a data dictionary defined per nuclide to a total data dictionary by summing over the nuclide axis. Assumes the nuclide axis is the first axis.
+
+    Parameters
+    ----------
+    mgxs_dict : dict
+        A dictionary containing multi-group cross-section data defined per nuclide. The values can be either numpy arrays or nested dictionaries (in which case the function is applied recursively to the nested dictionaries).
+    Returns
+    -------
+    mgxs_dict_normal : dict
+        A dictionary containing the multi-group cross-section data summed over the nuclide axis.
+    '''
+    mgxs_dict_normal = {}
+    for key in mgxs_dict.keys():
+        value = mgxs_dict[key]
+        if isinstance(value, dict):
+            mgxs_dict_normal[key] = data_dict_per_nuclide_to_total(value)
+        elif isinstance(value, list) or isinstance(value, tuple):            
+            mgxs_dict_normal[key] = tuple([jnp.sum(i, axis=0) for i in value])
+        else:            
+            mgxs_dict_normal[key] = jnp.sum(value, axis=0)
+    
+        
+    return mgxs_dict_normal
     
 
 
