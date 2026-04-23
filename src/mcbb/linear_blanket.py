@@ -5,6 +5,7 @@ import openmc
 from functools import cached_property
 import numpy as np
 from typing import Union
+from os import PathLike
 @dataclass
 class BlanketLayer1D(BlanketLayer):
     thickness : float  # in meters
@@ -29,6 +30,8 @@ class OpenMCLinearBlanketSimulation(OpenMCBlanketSimulation):
     energy_bins     : Iterable[float]
     source_strength : float = 1.0
     tally_types     : Tuple[Literal["flux", "heating", "tritium"]] = ("flux", "heating", "tritium")
+
+    sp_file         : Union[os.PathLike, None] = None
             
     @cached_property    
     def geometry(self):
@@ -112,11 +115,11 @@ class OpenMCSymmetricLinearBlanketSimulation(OpenMCLinearBlanketSimulation):
     @cached_property    
     def geometry(self):
         return _create_1D_geometry_symmetrized(
-            blanket           = self.blanket,
-            size_yz          = self.blanket.size_yz,
-            prism_boundary_type = self.blanket.prism_boundary_type,
+            blanket              = self.blanket,
+            size_yz              = self.blanket.size_yz,
+            prism_boundary_type  = self.blanket.prism_boundary_type,
             plasma_boundary_type = self.blanket.plasma_boundary_type,
-            material_list    = self.materials
+            material_list        = self.materials
         )
 
     
