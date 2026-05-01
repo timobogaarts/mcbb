@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from .blanket_base import BlanketLayer, Blanket, OpenMCBlanketSimulation
-from typing import List , Literal, Iterable, Tuple
+from typing import Dict, List , Literal, Iterable, Tuple
 import openmc
 from functools import cached_property
 import numpy as np
@@ -118,8 +118,83 @@ class OpenMCSymmetricLinearBlanketSimulation(OpenMCLinearBlanketSimulation):
             plasma_boundary_type = self.blanket.plasma_boundary_type,
             material_list    = self.materials
         )
-
     
+    def _create_1d_importance_map_radial(self,  energy_groups_ww : np.ndarray, n_x_importance_map : int = 100, legendre_order = 3, degree = 3, tn_order = 3, n_elem_per_region = 5, data_dict : Dict = None, **kwargs):
+        '''
+        Creates a 1D importance map in the radial direction
+
+        Parameters
+        ----------
+        energy_groups_ww : np.ndarray
+            The energy group boundaries to use for the importance map generation. Must be in descending order for this function (same as jax-sn). Automatically flipped for OpenMC ordering
+        '''
+        assert np.all(np.sort(energy_groups_ww)[::-1] == np.array(energy_groups_ww)), "Energy groups must be in descending order for this function (it uses the same ordering as jax-sn, namely descending). It is then automatically converted to OpenMC format (ascending)"        
+        if data_dict is None:
+            mgxs_data_dict = self.create_mgxs_data_dict(onp.flip(energy_groups_ww), legendre_order, extra_types = [])[0]
+        else:
+            mgxs_data_dict = data_dict
+        
+        from .sn.base_sn import create_importance_map_for_blanket            
+        blanket_start  = sum(self.blanket.average_thicknesses[1:])   # re-compensate for symmetry (as in create_importance_map_for_blanket)...
+        s_interp       = np.linspace(-blanket_start, self.blanket.average_thickness, n_x_importance_map)    
+        importance_map = create_importance_map_for_blanket(self.blanket, mgxs_data_dict,  [n_elem_per_region for i in range(len(self.blanket.layers))], degree, tn_order,s_interp)    
+        return s_interp + blanket_start, importance_map
+    
+    def create_weight_windows(self, energy_groups_ww : Iterable[float], degree  : int = 3, legendre_order : int = 3, tn_order : int = 3, n_elem_per_region : int = 5, ww_lower_upper_ratio : int = 3, ww_kwargs : Dict = {"max_split" : 2000}, data_dict : Dict = None, n_x_importance_map : int = 100, **kwargs):
+        '''
+        Creates weight windows for the blanket based on a forward-weighted CADIS importance map of a 1D blanket using the average thicknesses. 
+        The weight windows are on the same mesh as the tally and the source. This reduces overhead of the mesh localization.
+
+        Parameters:
+        ----------
+        data_dictionary : Dict
+            A dictionary containing any additional data required to create the importance map. This is assumed to have the same keys as the blanket.layer_names property. The dictionary 
+            values are a tuple of (total_cross_section, scattering_cross_section), where total_cross section is of shape [n_groups] and scattering_cross_section is of shape [l_order, n_groups, n_groups].
+        
+            
+
+        degree : int
+            The degree of the finite element basis to use for the importance map generation. Default is 3.
+        tn_order : int
+            The order of the Tn quadrature to use for the importance map generation. Default is 3.
+        n_elem_per_region : int
+            The number of finite elements to use per region in the importance map generation. Default is 5.
+        ww_lower_upper_ratio : int
+            The ratio of the lower to upper weight window values. Default is 3, meaning the upper weight window value is 3 times the lower weight window value. 
+        **kwargs : dict
+            Any additional keyword arguments to pass to the importance map generation function (which passes it directly to the multigroup operator creation, so it can be used to set different operators for the 
+            multigroup operator, e.g. TransportOperatorVmapPallas instead of TransportOperatorVmap).
+        '''
+        from .openmc_base_functions import importance_map_to_weight_window
+        assert np.all(np.sort(energy_groups_ww)[::-1] == np.array(energy_groups_ww)), "Energy groups must be in descending order for this function (it uses the same ordering as jax-sn, namely descending). It is then automatically converted to OpenMC format (ascending)"        
+        s_interp, importance_map = self._create_1d_importance_map_radial(energy_groups_ww, n_x_importance_map, legendre_order, degree, tn_order, n_elem_per_region, data_dict, **kwargs)
+
+        blanket_start = sum(self.blanket.average_thicknesses[1:])  
+
+        
+
+        importance_map = np.where(np.logical_and(s_interp > blanket_start, s_interp < blanket_start + self.blanket.average_thicknesses[0]), np.nan, importance_map) # set importance map to nan in the plasma region, as we do not want to generate weight windows there.
+        # They will be automatically set to the maximum weight window value.
+        importance_map_elem = 0.5 * (importance_map[:, :-1] + importance_map[:, 1:])
+
+        mesh = openmc.RectilinearMesh()
+        mesh.x_grid = s_interp * 1e2  # convert to cm for OpenMC
+
+        mesh.x_grid = np.linspace(self.geometry.bounding_box[0][0], self.geometry.bounding_box[1][0], n_x_importance_map)
+
+        mesh.y_grid = [self.geometry.bounding_box[0][1], self.geometry.bounding_box[1][1]]
+        mesh.z_grid = [self.geometry.bounding_box[0][2], self.geometry.bounding_box[1][2]]
+
+
+        return importance_map_to_weight_window(importance_map_elem, energy_groups_ww, mesh, ww_lower_upper_ratio, **ww_kwargs)
+
+        importance_map_element_wise = 0.5 * (importance_map[..., 1:] + importance_map[..., :-1]) # map to element-wise values by averaging the importance map at the element boundaries. 
+
+        return importance_map_to_weight_window(self.discrete_blanket.volume_mesh_structure.map_radial_array_to_layers(importance_map_element_wise), energy_groups, self.tally_mesh_openmc, ww_lower_upper_ratio, **ww_kwargs)
+
+
+
+        
 
     
     

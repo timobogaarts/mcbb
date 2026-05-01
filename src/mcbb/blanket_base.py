@@ -127,10 +127,11 @@ class OpenMCBlanketSimulation(ABC):
         -------
         
         '''
-        new = type(self)(**_core_dict(self))
-        new.settings_blanket.weight_windows = weight_windows
+        from dataclasses import replace
+        core = _core_dict(self)
+        core['settings_blanket'] = replace(self.settings_blanket, weight_windows=weight_windows)
+        return type(self)(**core)
         
-        return new
     
     def run(self, statepoint_file : str = None):
         import shutil
@@ -227,7 +228,17 @@ class OpenMCBlanketSimulation(ABC):
         Returns
         -------
         mgxs_dict : dict
-                A dictionary containing the multi-group cross-section data in a standard format
+                A dictionary containing the multi-group cross-section data:
+                e.g. 
+                {
+                    "BreedingZone" : {
+                      total, scattering
+                    }
+                }
+            
+
+        aux_dict : dict
+                A dictionary containing the auxiliary data (e.g. tritium breeding and heating).
         
         -------
         '''
