@@ -1,5 +1,5 @@
-import openmc 
-import numpy as np
+import openmc
+import numpy as onp
 from typing import List, Iterable, Tuple, Literal
 import jax.numpy as jnp
 
@@ -35,7 +35,7 @@ def create_openmc_settings(batches : int, samples : int, source : openmc.SourceB
     if seed is not None:
         settings.seed          = seed
     else:
-        settings.seed          = int(np.random.random(1)[0] * 1e13)    
+        settings.seed          = int(onp.random.random(1)[0] * 1e13)
     
     settings.run_mode      = 'fixed source'
     settings.source           = source
@@ -257,14 +257,14 @@ def _convert_to_openmc_format(importance_map : jnp.ndarray, group_boundaries : j
     flipped_group_boundaries : jnp.ndarray
         The energy group boundaries in ascending order
     '''
-    if np.all(np.sort(group_boundaries) == group_boundaries):
+    if onp.all(onp.sort(group_boundaries) == group_boundaries):
         ascending_group_boundaries = group_boundaries
         ascending_importance_map = importance_map
     else:
-        ascending_group_boundaries = np.flip(group_boundaries, axis=0)
-        ascending_importance_map = np.flip(importance_map, axis=0)
+        ascending_group_boundaries = onp.flip(group_boundaries, axis=0)
+        ascending_importance_map = onp.flip(importance_map, axis=0)
 
-    flipped_transposed_importance_map = np.moveaxis(ascending_importance_map, 0, -1)
+    flipped_transposed_importance_map = onp.moveaxis(ascending_importance_map, 0, -1)
 
     return flipped_transposed_importance_map, ascending_group_boundaries
 
@@ -299,11 +299,11 @@ def importance_map_to_weight_window(importance_map : jnp.ndarray, group_boundari
     weight_windows : openmc.WeightWindows
         An OpenMC WeightWindows object containing the lower and upper weight windows corresponding to the importance map.
     '''
-    assert importance_map.shape[0] == np.array(group_boundaries).shape[0] - 1, "The first dimension of the importance map should match the number of energy groups (group boundaries - 1)"
+    assert importance_map.shape[0] == onp.array(group_boundaries).shape[0] - 1, "The first dimension of the importance map should match the number of energy groups (group boundaries - 1)"
 
     openmc_importance_map, group_boundaries_openmc = _convert_to_openmc_format(importance_map, group_boundaries)
-    ww_lower_norm, ww_upper_norm                   = _importance_map_to_weight_windows(openmc_importance_map, ww_lower_upper_ratio)    #[mesh.shape, n_groups]            
-    weight_windows = openmc.WeightWindows(mesh, lower_ww_bounds = np.array(ww_lower_norm), upper_ww_bounds = np.array(ww_upper_norm), energy_bounds = np.array(group_boundaries_openmc), particle_type = "neutron", **kwargs)
+    ww_lower_norm, ww_upper_norm                   = _importance_map_to_weight_windows(openmc_importance_map, ww_lower_upper_ratio)    #[mesh.shape, n_groups]
+    weight_windows = openmc.WeightWindows(mesh, lower_ww_bounds = onp.array(ww_lower_norm), upper_ww_bounds = onp.array(ww_upper_norm), energy_bounds = onp.array(group_boundaries_openmc), particle_type = "neutron", **kwargs)
 
     return weight_windows
 
@@ -391,16 +391,16 @@ def _get_tally_results_divisor(sp_file : os.PathLike,  tally_names : Iterable[st
         A dictionary containing the extracted tally results for each specified tally and quantity, divided by the mesh volume to obtain scalar flux values in units of 1/cm^-2/s. The structure of the dictionary is as follows:
         {
             tally_name_1: {
-                quantity_1: np.ndarray of shape [mesh.shape, n_groups],
-                quantity_2: np.ndarray of shape [mesh.shape, n_groups],
+                quantity_1: onp.ndarray of shape [mesh.shape, n_groups],
+                quantity_2: onp.ndarray of shape [mesh.shape, n_groups],
                 ...
-                'energy_groups': np.ndarray of shape [n_groups + 1] containing the energy group boundaries in descending order
+                'energy_groups': onp.ndarray of shape [n_groups + 1] containing the energy group boundaries in descending order
             },
             tally_name_2: {
-                quantity_1: np.ndarray of shape [mesh.shape, n_groups],
-                quantity_2: np.ndarray of shape [mesh.shape, n_groups],
+                quantity_1: onp.ndarray of shape [mesh.shape, n_groups],
+                quantity_2: onp.ndarray of shape [mesh.shape, n_groups],
                 ...
-                'energy_groups': np.ndarray of shape [n_groups + 1] containing the energy group boundaries in descending order
+                'energy_groups': onp.ndarray of shape [n_groups + 1] containing the energy group boundaries in descending order
             },
             ...
         }   
@@ -420,15 +420,15 @@ def _get_tally_results_divisor(sp_file : os.PathLike,  tally_names : Iterable[st
                 if quantity == "rel_err":
                     divisor = 1.0
                 else:
-                    divisor = np.abs(mesh_data.volumes[:, None]) #[vol, eg]
+                    divisor = onp.abs(mesh_data.volumes[:, None]) #[vol, eg]
 
-                
-                result[sp_tally.name][quantity] = np.flip(sp_tally.get_reshaped_data(quantity)[..., 0,0],axis=1) / divisor # flip to descending again
+
+                result[sp_tally.name][quantity] = onp.flip(sp_tally.get_reshaped_data(quantity)[..., 0,0],axis=1) / divisor # flip to descending again
             try:
                 energy_groups = sp_tally.find_filter(openmc.EnergyFilter).bins
-                assert np.allclose(energy_groups[:-1, 1], energy_groups[1:, 0]), "Energy bins are not continuous; cannot add into result dictionary"
-                assert np.all(     energy_groups[:-1, 0] < energy_groups[1:, 0]), "Energy bins are not descending"
-                result[sp_tally.name]['energy_groups'] = np.flip(np.append(energy_groups[:, 0], energy_groups[-1, 1]))
+                assert onp.allclose(energy_groups[:-1, 1], energy_groups[1:, 0]), "Energy bins are not continuous; cannot add into result dictionary"
+                assert onp.all(     energy_groups[:-1, 0] < energy_groups[1:, 0]), "Energy bins are not descending"
+                result[sp_tally.name]['energy_groups'] = onp.flip(onp.append(energy_groups[:, 0], energy_groups[-1, 1]))
             except:
                 pass
 

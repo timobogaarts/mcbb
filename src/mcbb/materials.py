@@ -3,8 +3,6 @@ import contextlib
 from typing import List
 from .blanket_base import Blanket
 def create_openmc_ce_materials(blanket : Blanket, download=False, download_location = "",  libraries  : List[str] = ["FENDL-3.1d"], print_output = False) -> dict:
-    import openmc
-    import openmc_data_downloader
     '''
     Function to create continuous-energy materials for OpenMC from a dictionary of materials
 
@@ -29,6 +27,8 @@ def create_openmc_ce_materials(blanket : Blanket, download=False, download_locat
         A list containing the OpenMC materials    
 
     '''
+    import openmc
+    import openmc_data_downloader
 
     total_material_dict = []
     for i, layer in enumerate(blanket.layers):

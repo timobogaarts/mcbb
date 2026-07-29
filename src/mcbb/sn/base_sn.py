@@ -3,17 +3,27 @@ from ..blanket_base import Blanket, OpenMCBlanketSimulation
 from typing import Dict, Tuple 
 import lineax as lx
 
-def setup_linear_symm_mgop(blanket : Blanket, data_dictionary : Dict[str, Tuple[jnp.ndarray, jnp.ndarray]], 
+def setup_linear_symm_mgop(blanket : Blanket, data_dictionary : Dict[str, Tuple[jnp.ndarray, jnp.ndarray]],
                n_elem_per_region : Tuple[int],
                degree : int,
                tn_order : int,
-               **kwargs):    
-    import jax_sn    
+               multi_group_strategy = None,
+               **sweep_data_kwargs):
+    '''
+    **sweep_data_kwargs
+        Forwarded as ``sweep_data_kwargs`` to ``create_multi_group_operator``.
+    '''
+    import jax_sn
     from jax_sn.domain.geometric_domain import CrossSectionData
     from jax_sn.domain.domain_generation import create_cartesian_setup
     from jax_sn.domain import Domain
-    from jax_sn.solution_domain import SolutionDomain, BasixLagrangianSimplex    
+    from jax_sn.solution_domain import SolutionDomain, BasixLagrangianSimplex
     from jax_sn.quadrature_set import create_tn_quadrature_set
+    from jax_sn.operator_creation.multi_group_operator_creation import create_multi_group_operator
+    from jax_sn.operator_creation.default_strategies import DefaultMultiGroupStrategy
+
+    if multi_group_strategy is None:
+        multi_group_strategy = DefaultMultiGroupStrategy.default_multi_group_strategy(checkpoint=False)
 
     xs_data_dict = {name : CrossSectionData(total = jnp.array(data_dictionary[name][0]), scattering=jnp.array(data_dictionary[name][1])) for name in data_dictionary.keys()}
 
@@ -26,28 +36,30 @@ def setup_linear_symm_mgop(blanket : Blanket, data_dictionary : Dict[str, Tuple[
     xs_regions = [xs_data_dict[name] for name in names_blanket]
     region_size_res = [(size, res) for size, res in zip(layer_sizes, n_elem_per_region)]
 
-    def _symmetrize_no_plasma(list):
-        return [list[-( i + 1)] for  i in range(len(list) - 1)] + list
+    def _symmetrize_no_plasma(seq):
+        return [seq[-( i + 1)] for  i in range(len(seq) - 1)] + seq
     
     region_size_res_symm = _symmetrize_no_plasma(region_size_res)
     source_eg0_symm      = _symmetrize_no_plasma([1 if i ==0 else 0 for i in range(len(names_blanket))])    
     xs_regions_symm      = _symmetrize_no_plasma(xs_regions)
 
 
-    verts, conn, cross_section_idx, source = create_cartesian_setup(1, [region_size_res_symm], xs_regions_symm, source_eg0_symm,0)
+    verts, conn, cross_sections_indexed, source = create_cartesian_setup(1, [region_size_res_symm], xs_regions_symm, source_eg0_symm,0)
 
     element = BasixLagrangianSimplex(degree=degree, dimension = 1)
 
     solution_domain = jax_sn.solution_domain.SolutionDomain.from_element_and_domain(
         element = element,
-        domain = Domain.from_mesh_and_cross_sections((verts, conn), element.face_template, cross_section_idx)
-    )    
+        domain = Domain.from_mesh_and_cross_sections((verts, conn), element.face_template, cross_sections_indexed)
+    )
 
     source_basis = jnp.repeat(source, repeats = solution_domain.n_basis, axis = -1).reshape(-1, solution_domain.n_basis)
 
     reduced_quadrature_set = jax_sn.quadrature_set.QuadratureSetReduced.from_quadrature_set(create_tn_quadrature_set(tn_order), solution_domain.dimension)
-    
-    return jax_sn.operators.multi_group_operator.create_multi_group_operator(solution_domain, reduced_quadrature_set, **kwargs), source_basis
+
+    mgop = create_multi_group_operator(solution_domain, reduced_quadrature_set, multi_group_strategy, sweep_data_kwargs=sweep_data_kwargs)
+
+    return mgop, source_basis, solution_domain
 
     
     
@@ -58,7 +70,6 @@ def create_importance_map_for_blanket(blanket : Blanket, data_dictionary : Dict[
                s_values_blanket : jnp.ndarray,
                solver : lx.AbstractLinearSolver = lx.BiCGStab(1e-10, 1e-10, max_steps = 200),               
                **kwargs):
-    import jax_sn
     '''
     Automated 1D weight window generation using a 1D linear symmetric domain.
 
@@ -92,13 +103,14 @@ def create_importance_map_for_blanket(blanket : Blanket, data_dictionary : Dict[
         The interpolated importance map values at the weight window locations (shape [n_groups, n_weight_windows_in_blanket])
     '''
     
-    mgop, source_basis = setup_linear_symm_mgop(blanket, data_dictionary, n_elem_per_region, degree, tn_order, **kwargs)
-    
-    element = jax_sn.solution_domain.BasixLagrangianSimplex(degree, 1)
-    solution_domain = jax_sn.solution_domain.SolutionDomain.from_element_and_domain(element, mgop.domain)
-    rhs = jax_sn.operators.multi_group_operator.right_hand_side.IsotropicSourceSingleGroup.from_operator(mgop, source_basis)
+    from jax_sn.solvers.right_hand_side import IsotropicSourceSingleGroup
+    from jax_sn.variance_reduction import fw_cadis_scalar_flux
 
-    importance_map_solution = jax_sn.variance_reduction.fw_cadis_scalar_flux(mgop, rhs, solver)
+    mgop, source_basis, solution_domain = setup_linear_symm_mgop(blanket, data_dictionary, n_elem_per_region, degree, tn_order, **kwargs)
+
+    rhs = IsotropicSourceSingleGroup.from_operator(mgop, source_basis)
+
+    importance_map_solution = fw_cadis_scalar_flux(mgop, rhs, solver)
 
     blanket_start = sum(blanket.average_thicknesses[1:])   # compensate for symmetry!
     

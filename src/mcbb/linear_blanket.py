@@ -3,9 +3,10 @@ from .blanket_base import BlanketLayer, Blanket, OpenMCBlanketSimulation
 from typing import Dict, List , Literal, Iterable, Tuple
 import openmc
 from functools import cached_property
-import numpy as np
+import numpy as onp
 from typing import Union
 from os import PathLike
+import os
 @dataclass
 class BlanketLayer1D(BlanketLayer):
     thickness : float  # in meters
@@ -45,7 +46,7 @@ class OpenMCLinearBlanketSimulation(OpenMCBlanketSimulation):
 
     @cached_property    
     def tallies(self):
-        x_extent = np.linspace(self.geometry.bounding_box[0][0], self.geometry.bounding_box[1][0], self.n_x_spacing_tally  + 1)
+        x_extent = onp.linspace(self.geometry.bounding_box[0][0], self.geometry.bounding_box[1][0], self.n_x_spacing_tally  + 1)
         return _create_linear_openmc_tallies(
             x_spacing      = x_extent,
             egfilter       = self.energy_bins,
@@ -89,8 +90,7 @@ class OpenMCLinearBlanketSimulation(OpenMCBlanketSimulation):
         result = {}
         with openmc.StatePoint(sp_file) as sp:            
             for tally in self.tallies:   
-                sp_tally     = sp.get_tally(name = tally.name) 
-                #sp_tally     = sp.tallies[tally.id]
+                sp_tally     = sp.get_tally(name = tally.name)
                 mesh_data    = sp_tally.find_filter(openmc.MeshFilter).mesh
                 # here only x-dependent data is extracted, consistent with a 1D simulation...
                 result[sp_tally.name] = {}
@@ -100,8 +100,8 @@ class OpenMCLinearBlanketSimulation(OpenMCBlanketSimulation):
                     if quantity == "rel_err":
                         divisor = 1.0
                     else:
-                        divisor =  mesh_data.volumes[:,0,0, np.newaxis]  
-                    result[sp_tally.name][quantity] =  np.flip(sp_tally.get_reshaped_data(quantity, expand_dims = True)[:,0,0,:,0,0] / divisor, axis=1)
+                        divisor =  mesh_data.volumes[:,0,0, onp.newaxis]
+                    result[sp_tally.name][quantity] =  onp.flip(sp_tally.get_reshaped_data(quantity, expand_dims = True)[:,0,0,:,0,0] / divisor, axis=1)
                 result[sp_tally.name]['x'] = mesh_data.x_grid
             result['runtime'] = sp.runtime['simulation']
             result['tally_volume'] = mesh_data.volumes[:,0,0]
@@ -122,28 +122,29 @@ class OpenMCSymmetricLinearBlanketSimulation(OpenMCLinearBlanketSimulation):
             material_list        = self.materials
         )
     
-    def _create_1d_importance_map_radial(self,  energy_groups_ww : np.ndarray, n_x_importance_map : int = 100, legendre_order = 3, degree = 3, tn_order = 3, n_elem_per_region = 5, data_dict : Dict = None, **kwargs):
+    def _create_1d_importance_map_radial(self,  energy_groups_ww : onp.ndarray, n_x_importance_map : int = 100, legendre_order = 3, degree = 3, tn_order = 3, n_elem_per_region = 5, data_dict : Dict = None, **kwargs):
         '''
         Creates a 1D importance map in the radial direction
 
         Parameters
         ----------
-        energy_groups_ww : np.ndarray
+        energy_groups_ww : onp.ndarray
             The energy group boundaries to use for the importance map generation. Must be in descending order for this function (same as jax-sn). Automatically flipped for OpenMC ordering
         '''
-        assert np.all(np.sort(energy_groups_ww)[::-1] == np.array(energy_groups_ww)), "Energy groups must be in descending order for this function (it uses the same ordering as jax-sn, namely descending). It is then automatically converted to OpenMC format (ascending)"        
+        if not onp.all(onp.sort(energy_groups_ww)[::-1] == onp.array(energy_groups_ww)):
+            raise ValueError("Energy groups must be in descending order for this function (it uses the same ordering as jax-sn, namely descending). It is then automatically converted to OpenMC format (ascending)")
         if data_dict is None:
             mgxs_data_dict = self.create_mgxs_data_dict(onp.flip(energy_groups_ww), legendre_order, extra_types = [])[0]
         else:
             mgxs_data_dict = data_dict
-        
-        from .sn.base_sn import create_importance_map_for_blanket            
+
+        from .sn.base_sn import create_importance_map_for_blanket
         blanket_start  = sum(self.blanket.average_thicknesses[1:])   # re-compensate for symmetry (as in create_importance_map_for_blanket)...
-        s_interp       = np.linspace(-blanket_start, self.blanket.average_thickness, n_x_importance_map)    
+        s_interp       = onp.linspace(-blanket_start, self.blanket.average_thickness, n_x_importance_map)
         importance_map = create_importance_map_for_blanket(self.blanket, mgxs_data_dict,  [n_elem_per_region for i in range(len(self.blanket.layers))], degree, tn_order,s_interp)    
         return s_interp + blanket_start, importance_map
     
-    def create_weight_windows(self, energy_groups_ww : Iterable[float], degree  : int = 3, legendre_order : int = 3, tn_order : int = 3, n_elem_per_region : int = 5, ww_lower_upper_ratio : int = 3, ww_kwargs : Dict = {"max_split" : 2000}, data_dict : Dict = None, n_x_importance_map : int = 100, **kwargs):
+    def create_weight_windows(self, energy_groups_ww : Iterable[float], degree  : int = 3, legendre_order : int = 3, tn_order : int = 3, n_elem_per_region : int = 5, ww_lower_upper_ratio : int = 3, ww_kwargs : Dict = None, data_dict : Dict = None, n_x_importance_map : int = 100, **kwargs):
         '''
         Creates weight windows for the blanket based on a forward-weighted CADIS importance map of a 1D blanket using the average thicknesses. 
         The weight windows are on the same mesh as the tally and the source. This reduces overhead of the mesh localization.
@@ -169,50 +170,33 @@ class OpenMCSymmetricLinearBlanketSimulation(OpenMCLinearBlanketSimulation):
             multigroup operator, e.g. TransportOperatorVmapPallas instead of TransportOperatorVmap).
         '''
         from .openmc_base_functions import importance_map_to_weight_window
-        assert np.all(np.sort(energy_groups_ww)[::-1] == np.array(energy_groups_ww)), "Energy groups must be in descending order for this function (it uses the same ordering as jax-sn, namely descending). It is then automatically converted to OpenMC format (ascending)"        
+        if ww_kwargs is None:
+            ww_kwargs = {"max_split" : 2000}
+        if not onp.all(onp.sort(energy_groups_ww)[::-1] == onp.array(energy_groups_ww)):
+            raise ValueError("Energy groups must be in descending order for this function (it uses the same ordering as jax-sn, namely descending). It is then automatically converted to OpenMC format (ascending)")
         s_interp, importance_map = self._create_1d_importance_map_radial(energy_groups_ww, n_x_importance_map, legendre_order, degree, tn_order, n_elem_per_region, data_dict, **kwargs)
 
-        blanket_start = sum(self.blanket.average_thicknesses[1:])  
+        blanket_start = sum(self.blanket.average_thicknesses[1:])
 
-        
-
-        importance_map = np.where(np.logical_and(s_interp > blanket_start, s_interp < blanket_start + self.blanket.average_thicknesses[0]), np.nan, importance_map) # set importance map to nan in the plasma region, as we do not want to generate weight windows there.
+        importance_map = onp.where(onp.logical_and(s_interp > blanket_start, s_interp < blanket_start + self.blanket.average_thicknesses[0]), onp.nan, importance_map) # set importance map to nan in the plasma region, as we do not want to generate weight windows there.
         # They will be automatically set to the maximum weight window value.
         importance_map_elem = 0.5 * (importance_map[:, :-1] + importance_map[:, 1:])
 
         mesh = openmc.RectilinearMesh()
-        mesh.x_grid = s_interp * 1e2  # convert to cm for OpenMC
-
-        mesh.x_grid = np.linspace(self.geometry.bounding_box[0][0], self.geometry.bounding_box[1][0], n_x_importance_map)
-
+        mesh.x_grid = onp.linspace(self.geometry.bounding_box[0][0], self.geometry.bounding_box[1][0], n_x_importance_map)
         mesh.y_grid = [self.geometry.bounding_box[0][1], self.geometry.bounding_box[1][1]]
         mesh.z_grid = [self.geometry.bounding_box[0][2], self.geometry.bounding_box[1][2]]
 
-
         return importance_map_to_weight_window(importance_map_elem, energy_groups_ww, mesh, ww_lower_upper_ratio, **ww_kwargs)
-
-        importance_map_element_wise = 0.5 * (importance_map[..., 1:] + importance_map[..., :-1]) # map to element-wise values by averaging the importance map at the element boundaries. 
-
-        return importance_map_to_weight_window(self.discrete_blanket.volume_mesh_structure.map_radial_array_to_layers(importance_map_element_wise), energy_groups, self.tally_mesh_openmc, ww_lower_upper_ratio, **ww_kwargs)
-
-
-
-        
-
-    
-    
 
 
 def _create_1D_geometry(blanket : Blanket, size_yz : float, prism_boundary_type : str, plasma_boundary_type : str, material_list : List[openmc.Material]) -> openmc.Geometry:
-    import openmc
-    import numpy as np
-
     is_blanket_layers = [isinstance(i, BlanketLayer1D) for i in blanket.layers]
     if not all(is_blanket_layers):
         raise ValueError("All layers in the blanket must be of type BlanketLayer1D to create a 1D geometry.")
-        
-    prism = openmc.model.RectangularPrism(size_yz * 100.0, size_yz * 100.0, boundary_type=prism_boundary_type, axis = 'x')    
-    cumulative_thicknessess =[0] +list(np.cumsum([layer_i.thickness for layer_i in blanket.layers]))
+
+    prism = openmc.model.RectangularPrism(size_yz * 100.0, size_yz * 100.0, boundary_type=prism_boundary_type, axis = 'x')
+    cumulative_thicknessess =[0] +list(onp.cumsum([layer_i.thickness for layer_i in blanket.layers]))
     enddict  = [openmc.XPlane(x0 = j * 100) for j in cumulative_thicknessess]
     enddict[0].boundary_type  = plasma_boundary_type    
     enddict[-1].boundary_type = "vacuum"   
@@ -248,18 +232,15 @@ def _create_1D_geometry_symmetrized(blanket : Blanket, size_yz : float, prism_bo
         The OpenMC geometry object for the symmetrized 1D blanket
     -------
     '''
-    import openmc
-    import numpy as np
-
     is_blanket_layers = [isinstance(i, BlanketLayer1D) for i in blanket.layers]
     if not all(is_blanket_layers):
         raise ValueError("All layers in the blanket must be of type BlanketLayer1D to create a 1D geometry.")
-            
-    prism = openmc.model.RectangularPrism(size_yz * 100.0, size_yz * 100.0, boundary_type=prism_boundary_type, axis = 'x')    
-    cumsum_values = np.cumsum([layer_i.thickness / 2.0 if layer_i.name == "Plasma" else layer_i.thickness for layer_i in blanket.layers])
-    cumulative_thicknessess =list(-np.flip(cumsum_values)) +list(cumsum_values)
 
-    cumulative_thicknessess = np.array(cumulative_thicknessess) - np.min(cumulative_thicknessess)  # shift so that the minimum is at 0, ensuring the first layer starts at 0
+    prism = openmc.model.RectangularPrism(size_yz * 100.0, size_yz * 100.0, boundary_type=prism_boundary_type, axis = 'x')
+    cumsum_values = onp.cumsum([layer_i.thickness / 2.0 if layer_i.name == "Plasma" else layer_i.thickness for layer_i in blanket.layers])
+    cumulative_thicknessess =list(-onp.flip(cumsum_values)) +list(cumsum_values)
+
+    cumulative_thicknessess = onp.array(cumulative_thicknessess) - onp.min(cumulative_thicknessess)  # shift so that the minimum is at 0, ensuring the first layer starts at 0
     
     enddict  = [openmc.XPlane(x0 = j * 100) for j in cumulative_thicknessess]
     enddict[0].boundary_type  = 'vacuum'  
@@ -307,10 +288,9 @@ def _create_linear_openmc_source(geometry, source_strength):
 def _create_linear_openmc_tallies(x_spacing, egfilter : Iterable[float], openmc_geometry : openmc.Geometry,  types : List[Literal["flux", "heating", "tritium"]] = ["flux", "heating", "tritium"]):
 
     try:
-    
         egfilter = openmc.EnergyFilter(egfilter)
-    except:        
-        egfilter = openmc.EnergyFilter(np.flip(egfilter))
+    except Exception:
+        egfilter = openmc.EnergyFilter(onp.flip(egfilter))
     smesh = openmc.RectilinearMesh()
     smesh.x_grid = x_spacing
 

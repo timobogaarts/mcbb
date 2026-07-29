@@ -1,21 +1,12 @@
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from typing import Dict, List
 from abc import ABC, abstractmethod
 import openmc
 from functools import cached_property
 from typing import Union, Literal, Iterable
-import numpy as np
+import numpy as onp
 import copy
 
-
-def _core_dict(self):
-    '''
-    Helper for a deepcopy without any cached properties: just returns the fields.
-    '''
-    return {
-        f.name: getattr(self, f.name)
-        for f in fields(self)
-    }
 
 @dataclass
 class BlanketLayer:
@@ -114,7 +105,10 @@ class OpenMCBlanketSimulation(ABC):
     def with_weight_windows(self, weight_windows : openmc.WeightWindows):
         '''
         Create a new object that has weight windows in the settings.
-        The rest of the geometry, materials, and tallies are unchanged.
+        The rest of the geometry, materials, and tallies are unchanged. Implemented as a shallow copy rather
+        than a fresh instance, so any already-computed cached properties (geometry, materials, tallies, source)
+        are reused instead of recomputed — this matters for subclasses where those are expensive (e.g. DAGMC
+        mesh generation). Only the settings/model caches, which actually depend on the weight windows, are invalidated.
 
         Parameters
         ----------
@@ -125,32 +119,40 @@ class OpenMCBlanketSimulation(ABC):
         new_simulation : OpenMCBlanketSimulation
             A new OpenMCBlanketSimulation object with the same geometry, materials, and tallies as the original, but with the specified weight windows in the settings
         -------
-        
+
         '''
         from dataclasses import replace
-        core = _core_dict(self)
-        core['settings_blanket'] = replace(self.settings_blanket, weight_windows=weight_windows)
-        return type(self)(**core)
+        new_simulation = copy.copy(self)
+        new_simulation.settings_blanket = replace(self.settings_blanket, weight_windows=weight_windows)
+        new_simulation.__dict__.pop('settings', None)
+        new_simulation.__dict__.pop('model', None)
+        return new_simulation
         
     
-    def run(self, statepoint_file : str = None):
-        import shutil
+    def run(self, statepoint_file : str = None, threads : int = 12):
         '''
         Function to run the OpenMC simulation
+        Parameters
+        ----------
+        statepoint_file : str
+            Path to a cached statepoint file. If it already exists, the simulation is skipped and this path is used directly.
+        threads : int
+            Number of OpenMC threads to run with. Default is 12.
         Returns
         -------
         sp_file : str
             The path to the OpenMC statepoint file
         -------
         '''
-        import os 
+        import shutil
+        import os
 
         if (statepoint_file != None) and (os.path.exists(statepoint_file)):
             print("Cached at statepoint file: " + statepoint_file)
             self.sp_file = statepoint_file
             return statepoint_file
         model = openmc.Model(self.geometry, self.materials, self.settings, self.tallies)
-        sp_file = model.run(threads=12)
+        sp_file = model.run(threads=threads)
         
         if statepoint_file is not None:
             shutil.move(sp_file, statepoint_file)
@@ -170,11 +172,11 @@ class OpenMCBlanketSimulation(ABC):
         )
         return mgxs_lib
     
-    def create_mgxs_library(self,  energy_groups : Iterable[float], legendre_order : int, extra_types : List[str] = ['(n,Xt)', 'heating'], per_nuclide : bool = False):
+    def create_mgxs_library(self,  energy_groups : Iterable[float], legendre_order : int, extra_types : List[str] = ['(n,Xt)', 'heating'], per_nuclide : bool = False, threads : int = 12):
         '''
         Function to create a multi-group cross-section library for the OpenMC simulation
 
-        Runs the simulation using the specified settings as well; 
+        Runs the simulation using the specified settings as well;
         results are available in the same way using get_tally_results.
 
         Parameters
@@ -185,22 +187,24 @@ class OpenMCBlanketSimulation(ABC):
             The energy group boundaries for the multi-group cross-section library, ordered from low to high
         extra_types : List[str]
             A list of extra multi-group cross-section types to include in the library (default is ['(n,Xt)', 'heating'])
-        
+        threads : int
+            Number of OpenMC threads to run with. Default is 12.
+
         Returns
         -------
         mgxs_lib : openmc.mgxs.Library
             The OpenMC multi-group cross-section library object for the breeding blanket, loaded with the data
-        
+
         -------
         '''
         mgxs_lib = self._setup_mgxs_lib(energy_groups, legendre_order, extra_types, per_nuclide = per_nuclide)
 
         tallies_copy = self.tallies[:]
         tallies_omc = openmc.Tallies(tallies_copy)
-        mgxs_lib.add_to_tallies(tallies_omc, merge=True)                
+        mgxs_lib.add_to_tallies(tallies_omc, merge=True)
         model = openmc.Model(self.geometry, self.materials, self.settings, tallies_omc)
-        
-        sp_file = model.run(threads=12)
+
+        sp_file = model.run(threads=threads)
 
         with openmc.StatePoint(sp_file) as sp:
             mgxs_lib.load_from_statepoint(sp)
@@ -209,10 +213,10 @@ class OpenMCBlanketSimulation(ABC):
 
         return mgxs_lib
     
-    def create_mgxs_data_dict(self, energy_groups : Iterable[float], legendre_order : int, extra_types : List[str] = ['(n,Xt)', 'heating'], conversion_factor = 100, per_nuclide : bool = False):
+    def create_mgxs_data_dict(self, energy_groups : Iterable[float], legendre_order : int, extra_types : List[str] = ['(n,Xt)', 'heating'], conversion_factor = 100, per_nuclide : bool = False, threads : int = 12):
         '''
-        Convenience function that instead of creating a native OpenMC multi-group cross-section library, creates a dictionary of the multi-group cross-section data         
-        in the format specified by the mgxs_lib_to_data_dicts function in openmc_base_functions.py, which can be more convenient 
+        Convenience function that instead of creating a native OpenMC multi-group cross-section library, creates a dictionary of the multi-group cross-section data
+        in the format specified by the mgxs_lib_to_data_dicts function in openmc_base_functions.py, which can be more convenient
 
         Parameters
         ----------
@@ -224,31 +228,32 @@ class OpenMCBlanketSimulation(ABC):
             A list of extra multi-group cross-section types to include in the library (default is ['(n,Xt)', 'heating'])
         conversion_factor : float
             A factor to convert the multi-group cross-section data to the desired units (default is 100, which converts from cm to m for the cross-sections)
-        
+        threads : int
+            Number of OpenMC threads to run with. Default is 12.
+
         Returns
         -------
         mgxs_dict : dict
                 A dictionary containing the multi-group cross-section data:
-                e.g. 
+                e.g.
                 {
                     "BreedingZone" : {
                       total, scattering
                     }
                 }
-            
+
 
         aux_dict : dict
                 A dictionary containing the auxiliary data (e.g. tritium breeding and heating).
-        
+
         -------
         '''
         from .openmc_base_functions import mgxs_lib_to_data_dicts
-        mgxs_lib = self.create_mgxs_library(energy_groups, legendre_order, extra_types, per_nuclide=per_nuclide)
+        mgxs_lib = self.create_mgxs_library(energy_groups, legendre_order, extra_types, per_nuclide=per_nuclide, threads=threads)
         return mgxs_lib_to_data_dicts(mgxs_lib, conversion_factor=conversion_factor)
 
     def plot_geometry(self,  basis, slice_coord):
         plots = openmc.Plot.from_geometry(self.geometry, basis = basis, slice_coord=slice_coord)
-        #plots.color_by = 'material'
         self.materials.export_to_xml()
         self.geometry.export_to_xml()
         openmc.plot_inline(plots)
