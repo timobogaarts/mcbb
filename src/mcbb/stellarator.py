@@ -264,7 +264,7 @@ def _tetrahedral_mesh_source(tet_mesh : Tuple[jnp.ndarray, jnp.ndarray], source_
     return openmc.MeshSource(openmc_mesh, openmc_mesh_sources)
 
 
-def generate_flux_surface_source(flux_surface : ParametrisedSurface, s_spacing : jnp.ndarray, source_callable : Callable[[jnp.ndarray], jnp.ndarray], n_theta : int, n_phi : int, toroidal_extent : ToroidalExtent, source_mesh_filename : str):
+def generate_flux_surface_source(flux_surface : ParametrisedSurface, s_spacing : jnp.ndarray, source_callable : Callable[[jnp.ndarray], jnp.ndarray], toroidal_extent : ToroidalExtent, n_theta : int, n_phi : int, source_mesh_filename : str):
     '''
     Generates a flux_surface_source from a given radial coordinate spacing.
 
@@ -287,13 +287,13 @@ def generate_flux_surface_source(flux_surface : ParametrisedSurface, s_spacing :
         The radial coordinate spacing to generate the source for. Should be of shape (n_s,) where n_s is the number of radial points. The source will be generated at the midpoints of the radial spacing, so the first and last points will be ignored.
     source_callable : Callable[[jnp.ndarray], jnp.ndarray]
         A callable that takes in a radial coordinate spacing and returns a radial source distribution.
-     
+
+    toroidal_extent : ToroidalExtent
+        The toroidal extent of the mesh. Should be a ToroidalExtent object.
     n_theta : int
         The number of poloidal points to use for the mesh.
     n_phi : int
         The number of toroidal points to use for the mesh.
-    toroidal_extent : ToroidalExtent
-        The toroidal extent of the mesh. Should be a ToroidalExtent object.
     source_mesh_filename : str
         The filename to save the generated mesh to. Should be a string ending in .h5m, as the mesh will be saved in MOAB format.    
     
