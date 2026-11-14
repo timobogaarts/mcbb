@@ -8,42 +8,7 @@ import numpy as onp
 import copy
 
 
-@dataclass
-class BlanketLayer:
-    name     : str
-    elements : Dict
-
-
-@dataclass
-class Blanket(ABC):
-    layers : List[BlanketLayer]
-
-
-    
-    @property 
-    @abstractmethod
-    def average_thicknesses(self):
-        '''
-        Average thicknesses of the layers in the blanket. 
-        Should be a list of the same length as the number of layers, where each entry is the average thickness of that layer in meters. 
-        The first layer is expected to be the plasma, and the rest are the blanket layers.'''
-        ...
-
-    @property     
-    def average_thickness(self):
-        '''
-        Average thickness of the entire blanket, in meters. 
-        '''
-        return sum(self.average_thicknesses)
-
-
-    @property
-    def n_layers(self):
-        return len(self.layers)
-    
-    @property
-    def layer_names(self):
-        return [layer.name for layer in self.layers]
+from .blanket import BlanketLayer, Blanket   # re-exported: the definitions live in blanket.py (no openmc)
 
 
 @dataclass

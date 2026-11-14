@@ -1,6 +1,6 @@
 
 def hcpb():    
-    from .linear_blanket import BlanketLayer1D, Blanket1D
+    from .blanket import BlanketLayer1D, Blanket1D
     values_dict = {
             "Plasma" : {
                 "Thickness" : 1.0, 

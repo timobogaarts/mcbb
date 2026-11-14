@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from ..blanket_base import Blanket, OpenMCBlanketSimulation
+from ..blanket import Blanket
 from typing import Dict, Tuple 
 import lineax as lx
 
@@ -10,17 +10,18 @@ def setup_linear_symm_mgop(blanket : Blanket, data_dictionary : Dict[str, Tuple[
                multi_group_strategy = None,
                **sweep_data_kwargs):
     '''
-    **sweep_data_kwargs
-        Forwarded as ``sweep_data_kwargs`` to ``create_multi_group_operator``.
+    Multigroup operator of the 1D slab mirrored around the plasma.
+
+    Returns (multi-group operator, isotropic source in group 0 [n_el, n_basis], solution domain).
+    ``sweep_data_kwargs`` are not supported by the builder API and raise.
     '''
-    import jax_sn
-    from jax_sn.domain.geometric_domain import CrossSectionData
+    if sweep_data_kwargs:
+        raise TypeError(f"sweep_data_kwargs are no longer supported (builder API): {sorted(sweep_data_kwargs)}")
+    from jax_sn.domain import CrossSectionData
     from jax_sn.domain.domain_generation import create_cartesian_setup
-    from jax_sn.domain import Domain
-    from jax_sn.solution_domain import SolutionDomain, BasixLagrangianSimplex
-    from jax_sn.quadrature_set import create_tn_quadrature_set
-    from jax_sn.operator_creation.multi_group_operator_creation import create_multi_group_operator
-    from jax_sn.operator_creation.default_strategies import DefaultMultiGroupStrategy
+    from jax_sn.solution_domain import BasixLagrangianSimplex
+    from jax_sn.quadrature_set import create_tn_quadrature_set, QuadratureSetReduced
+    from jax_sn.operator_creation import MultiGroupBuilder, DefaultMultiGroupStrategy
 
     if multi_group_strategy is None:
         multi_group_strategy = DefaultMultiGroupStrategy.default_multi_group_strategy(checkpoint=False)
@@ -48,18 +49,13 @@ def setup_linear_symm_mgop(blanket : Blanket, data_dictionary : Dict[str, Tuple[
 
     element = BasixLagrangianSimplex(degree=degree, dimension = 1)
 
-    solution_domain = jax_sn.solution_domain.SolutionDomain.from_element_and_domain(
-        element = element,
-        domain = Domain.from_mesh_and_cross_sections((verts, conn), element.face_template, cross_sections_indexed)
-    )
+    reduced_quadrature_set = QuadratureSetReduced.from_quadrature_set(create_tn_quadrature_set(tn_order), 1)
 
-    source_basis = jnp.repeat(source, repeats = solution_domain.n_basis, axis = -1).reshape(-1, solution_domain.n_basis)
+    builder = MultiGroupBuilder(verts, conn, element, cross_sections_indexed, reduced_quadrature_set, multi_group_strategy)
 
-    reduced_quadrature_set = jax_sn.quadrature_set.QuadratureSetReduced.from_quadrature_set(create_tn_quadrature_set(tn_order), solution_domain.dimension)
+    source_basis = jnp.repeat(source, repeats = element.n_basis, axis = -1).reshape(-1, element.n_basis)
 
-    mgop = create_multi_group_operator(solution_domain, reduced_quadrature_set, multi_group_strategy, sweep_data_kwargs=sweep_data_kwargs)
-
-    return mgop, source_basis, solution_domain
+    return builder.multi_group_operator, source_basis, builder.solution_domain
 
     
     

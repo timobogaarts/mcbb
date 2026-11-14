@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from .blanket_base import BlanketLayer, Blanket, OpenMCBlanketSimulation
+from .blanket import BlanketLayer1D, Blanket1D   # re-exported
 from typing import Dict, List , Literal, Iterable, Tuple
 import openmc
 from functools import cached_property
@@ -7,24 +8,6 @@ import numpy as onp
 from typing import Union
 from os import PathLike
 import os
-@dataclass
-class BlanketLayer1D(BlanketLayer):
-    thickness : float  # in meters
-
-@dataclass
-class Blanket1D(Blanket):
-    size_yz : float  # in meters
-    prism_boundary_type : str = 'periodic'  # e.g., 'reflective', 'vacuum', etc.
-    plasma_boundary_type : str = 'vacuum'
-
-    @property     
-    def average_thicknesses(self):
-        return self.thicknesses
-
-    @property
-    def thicknesses(self):
-        return [layer.thickness for layer in self.layers]
-    
 @dataclass
 class OpenMCLinearBlanketSimulation(OpenMCBlanketSimulation):
     n_x_spacing_tally : int 
